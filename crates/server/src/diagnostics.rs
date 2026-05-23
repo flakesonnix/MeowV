@@ -1,3 +1,6 @@
+use crate::enforcement::{
+    SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement,
+};
 use crate::event_log::{SessionEvent, SessionEventLog};
 use crate::session::{SessionState, SessionStateMachine};
 
@@ -9,6 +12,8 @@ pub struct SessionDiagnostics {
     pub last_event_message: Option<String>,
     pub ready_dry_run: bool,
     pub failure_reason: Option<String>,
+    pub enforcement_policy: Option<String>,
+    pub enforcement_decision: Option<String>,
 }
 
 impl SessionDiagnostics {
@@ -23,7 +28,20 @@ impl SessionDiagnostics {
             last_event_message: log.last().map(|e| e.message.clone()),
             events: log.events().to_vec(),
             current_state,
+            enforcement_policy: None,
+            enforcement_decision: None,
         }
+    }
+
+    /// Attach enforcement context. Evaluates the enforcement decision from
+    /// current session state and failure reason, then records both policy
+    /// and decision in the diagnostics output.
+    pub fn with_enforcement(mut self, policy: &SessionEnforcementPolicy) -> Self {
+        let decision =
+            evaluate_enforcement(&self.current_state, self.failure_reason.as_deref(), policy);
+        self.enforcement_policy = Some(format!("{policy:?}"));
+        self.enforcement_decision = Some(decision.to_text());
+        self
     }
 
     pub fn to_text(&self) -> String {
@@ -32,6 +50,12 @@ impl SessionDiagnostics {
         out.push_str(&format!("ready_dry_run: {}\n", self.ready_dry_run));
         if let Some(reason) = &self.failure_reason {
             out.push_str(&format!("failure_reason: {reason}\n"));
+        }
+        if let Some(policy) = &self.enforcement_policy {
+            out.push_str(&format!("enforcement_policy: {policy}\n"));
+        }
+        if let Some(decision) = &self.enforcement_decision {
+            out.push_str(&format!("{decision}\n"));
         }
         out.push_str("state_history:");
         if self.state_history.is_empty() {
@@ -76,7 +100,8 @@ impl SessionDiagnostics {
             .collect();
         format!(
             "{{\"current_state\":\"{:?}\",\"ready_dry_run\":{},\"failure_reason\":{},\
-\"state_history\":[{}],\"event_count\":{},\"events\":[{}],\"last_event_message\":{}}}",
+\"state_history\":[{}],\"event_count\":{},\"events\":[{}],\"last_event_message\":{},\
+\"enforcement_policy\":{},\"enforcement_decision\":{}}}",
             self.current_state,
             self.ready_dry_run,
             optional_json_string(self.failure_reason.as_deref()),
@@ -84,6 +109,8 @@ impl SessionDiagnostics {
             self.event_count,
             events.join(","),
             optional_json_string(self.last_event_message.as_deref()),
+            optional_json_string(self.enforcement_policy.as_deref()),
+            optional_json_string(self.enforcement_decision.as_deref()),
         )
     }
 }

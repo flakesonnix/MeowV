@@ -9,10 +9,11 @@ mod shutdown;
 mod status;
 
 pub use config::{
-    AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, JoinGateConfigMode,
-    JoinGateSection, LogFormat, LogLevel, LoggingSection, ProtocolSection, ResourcesSection,
-    ServerConfig, ServerSection,
+    AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, EnforcementSection,
+    JoinGateConfigMode, JoinGateSection, LogFormat, LogLevel, LoggingSection, ProtocolSection,
+    ResourcesSection, ServerConfig, ServerSection,
 };
+pub use enforcement::{SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement};
 pub use session_registry::{
     SessionId, SessionRegistry, SessionRegistryEntry, SessionRegistrySnapshot,
 };
@@ -172,9 +173,7 @@ async fn admin_stdin_loop(
     config: ServerConfig,
     state: Arc<SharedState>,
 ) {
-    use admin::{
-        handle_admin_command_with_context, parse_admin_command, AdminCommandParseError,
-    };
+    use admin::{AdminCommandParseError, handle_admin_command_with_context, parse_admin_command};
 
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
@@ -200,7 +199,11 @@ async fn admin_stdin_loop(
                     );
                     info!(message = %result.message, "admin");
                     if result.should_quit {
-                        state.shutdown.lock().unwrap().request(shutdown::ShutdownReason::AdminQuit);
+                        state
+                            .shutdown
+                            .lock()
+                            .unwrap()
+                            .request(shutdown::ShutdownReason::AdminQuit);
                         let _ = quit_tx.send(());
                         return;
                     }
@@ -325,7 +328,8 @@ async fn handle_client(
                         event_log.len(),
                     );
                     if config.diagnostics.print_session_diagnostics {
-                        let diag = SessionDiagnostics::from_parts(&session, &event_log);
+                        let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                            .with_enforcement(&config.enforcement.mode);
                         let text = match config.diagnostics.format {
                             Fmt::Text => diag.to_text(),
                             Fmt::JsonStub => diag.to_json_stub(),
@@ -370,7 +374,8 @@ async fn handle_client(
                         event_log.len(),
                     );
                     if config.diagnostics.print_session_diagnostics {
-                        let diag = SessionDiagnostics::from_parts(&session, &event_log);
+                        let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                            .with_enforcement(&config.enforcement.mode);
                         let text = match config.diagnostics.format {
                             Fmt::Text => diag.to_text(),
                             Fmt::JsonStub => diag.to_json_stub(),
@@ -427,21 +432,37 @@ async fn handle_client(
                         "protocol negotiation dry-run: non-exact overlap detected"
                     );
                 }
-        if let Err(e) = session.on_negotiation_logged() {
-            warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
-        } else {
-            event_log.record(
-                SessionEventKind::ProtocolNegotiationDryRun,
-                SessionState::NegotiationDryRunLogged,
-                format!("negotiation log processed for {name}"),
-            );
-            state.registry.lock().unwrap().update_session(
-                &session_id,
-                session.state().clone(),
-                event_log.len(),
-            );
-            info!(%client_id, state = ?session.state(), "session: negotiation logged");
-        }
+                if let Err(e) = session.on_negotiation_logged() {
+                    warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
+                    if config.enforcement.mode == SessionEnforcementPolicy::Strict {
+                        session.fail(format!("negotiation transition failed: {e}"));
+                        if handle_enforcement(
+                            &session,
+                            &mut event_log,
+                            &session_id,
+                            &state.registry,
+                            &config,
+                            client_id,
+                            &mut writer_half,
+                        )
+                        .await?
+                        {
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    event_log.record(
+                        SessionEventKind::ProtocolNegotiationDryRun,
+                        SessionState::NegotiationDryRunLogged,
+                        format!("negotiation log processed for {name}"),
+                    );
+                    state.registry.lock().unwrap().update_session(
+                        &session_id,
+                        session.state().clone(),
+                        event_log.len(),
+                    );
+                    info!(%client_id, state = ?session.state(), "session: negotiation logged");
+                }
 
                 (name, caps)
             }
@@ -509,6 +530,22 @@ async fn handle_client(
         .await?;
         if let Err(e) = session.on_resource_announcement_sent() {
             warn!(%client_id, error = %e, "session: unexpected announcement transition error");
+            if config.enforcement.mode == SessionEnforcementPolicy::Strict {
+                session.fail(format!("resource announcement transition failed: {e}"));
+                if handle_enforcement(
+                    &session,
+                    &mut event_log,
+                    &session_id,
+                    &state.registry,
+                    &config,
+                    client_id,
+                    &mut writer_half,
+                )
+                .await?
+                {
+                    return Ok(());
+                }
+            }
         } else {
             event_log.record(
                 SessionEventKind::ResourceAnnouncementSent,
@@ -588,6 +625,36 @@ async fn handle_client(
                 if let Some((Some(announcement), caps)) = client_data {
                     if let Err(e) = session.on_availability_report_received() {
                         warn!(%client_id, error = %e, "session: unexpected availability transition error");
+                        if config.enforcement.mode == SessionEnforcementPolicy::Strict {
+                            session.fail(format!("availability report transition failed: {e}"));
+                            event_log.record(
+                                SessionEventKind::Failed,
+                                SessionState::Failed,
+                                format!("enforcement: availability report transition failed: {e}"),
+                            );
+                            state.registry.lock().unwrap().update_session(
+                                &session_id,
+                                SessionState::Failed,
+                                event_log.len(),
+                            );
+                            if config.diagnostics.print_session_diagnostics {
+                                let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                    .with_enforcement(&config.enforcement.mode);
+                                let text = match config.diagnostics.format {
+                                    Fmt::Text => diag.to_text(),
+                                    Fmt::JsonStub => diag.to_json_stub(),
+                                };
+                                info!(%client_id, "session diagnostics (enforcement):\n{text}");
+                            }
+                            let _ = client_tx.send(ServerMessage::Disconnect {
+                                reason: DisconnectReason::InvalidHandshake,
+                                message: format!(
+                                    "enforcement: availability report transition failed: {e}"
+                                ),
+                            });
+                            info!(%client_id, "enforcement: session disconnected due to availability report failure");
+                            break;
+                        }
                     } else {
                         event_log.record(
                             SessionEventKind::AvailabilityReportReceived,
@@ -643,6 +710,34 @@ async fn handle_client(
                         }
                         Err(e) => {
                             warn!(%client_id, error = %e, "session: unexpected policy transition error");
+                            if config.enforcement.mode == SessionEnforcementPolicy::Strict {
+                                session.fail(format!("policy transition failed: {e}"));
+                                event_log.record(
+                                    SessionEventKind::Failed,
+                                    SessionState::Failed,
+                                    format!("enforcement: policy transition failed: {e}"),
+                                );
+                                state.registry.lock().unwrap().update_session(
+                                    &session_id,
+                                    SessionState::Failed,
+                                    event_log.len(),
+                                );
+                                if config.diagnostics.print_session_diagnostics {
+                                    let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                        .with_enforcement(&config.enforcement.mode);
+                                    let text = match config.diagnostics.format {
+                                        Fmt::Text => diag.to_text(),
+                                        Fmt::JsonStub => diag.to_json_stub(),
+                                    };
+                                    info!(%client_id, "session diagnostics (enforcement):\n{text}");
+                                }
+                                let _ = client_tx.send(ServerMessage::Disconnect {
+                                    reason: DisconnectReason::InvalidHandshake,
+                                    message: format!("enforcement: policy transition failed: {e}"),
+                                });
+                                info!(%client_id, "enforcement: session disconnected due to policy transition failure");
+                                break;
+                            }
                         }
                     }
 
@@ -664,6 +759,34 @@ async fn handle_client(
 
                     if let Err(e) = session.on_join_gate_sent() {
                         warn!(%client_id, error = %e, "session: unexpected join gate transition error");
+                        if config.enforcement.mode == SessionEnforcementPolicy::Strict {
+                            session.fail(format!("join gate transition failed: {e}"));
+                            event_log.record(
+                                SessionEventKind::Failed,
+                                SessionState::Failed,
+                                format!("enforcement: join gate transition failed: {e}"),
+                            );
+                            state.registry.lock().unwrap().update_session(
+                                &session_id,
+                                SessionState::Failed,
+                                event_log.len(),
+                            );
+                            if config.diagnostics.print_session_diagnostics {
+                                let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                    .with_enforcement(&config.enforcement.mode);
+                                let text = match config.diagnostics.format {
+                                    Fmt::Text => diag.to_text(),
+                                    Fmt::JsonStub => diag.to_json_stub(),
+                                };
+                                info!(%client_id, "session diagnostics (enforcement):\n{text}");
+                            }
+                            let _ = client_tx.send(ServerMessage::Disconnect {
+                                reason: DisconnectReason::InvalidHandshake,
+                                message: format!("enforcement: join gate transition failed: {e}"),
+                            });
+                            info!(%client_id, "enforcement: session disconnected due to join gate transition failure");
+                            break;
+                        }
                     } else {
                         event_log.record(
                             SessionEventKind::JoinGateDryRunSent,
@@ -680,6 +803,34 @@ async fn handle_client(
 
                     if let Err(e) = session.mark_ready_dry_run() {
                         warn!(%client_id, error = %e, "session: unexpected ready transition error");
+                        if config.enforcement.mode == SessionEnforcementPolicy::Strict {
+                            session.fail(format!("ready transition failed: {e}"));
+                            event_log.record(
+                                SessionEventKind::Failed,
+                                SessionState::Failed,
+                                format!("enforcement: ready transition failed: {e}"),
+                            );
+                            state.registry.lock().unwrap().update_session(
+                                &session_id,
+                                SessionState::Failed,
+                                event_log.len(),
+                            );
+                            if config.diagnostics.print_session_diagnostics {
+                                let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                    .with_enforcement(&config.enforcement.mode);
+                                let text = match config.diagnostics.format {
+                                    Fmt::Text => diag.to_text(),
+                                    Fmt::JsonStub => diag.to_json_stub(),
+                                };
+                                info!(%client_id, "session diagnostics (enforcement):\n{text}");
+                            }
+                            let _ = client_tx.send(ServerMessage::Disconnect {
+                                reason: DisconnectReason::InvalidHandshake,
+                                message: format!("enforcement: ready transition failed: {e}"),
+                            });
+                            info!(%client_id, "enforcement: session disconnected due to ready transition failure");
+                            break;
+                        }
                     } else {
                         event_log.record(
                             SessionEventKind::ReadyDryRun,
@@ -693,7 +844,8 @@ async fn handle_client(
                         );
                         info!(%client_id, state = ?session.state(), "session: ready (dry-run)");
                         if config.diagnostics.print_session_diagnostics {
-                            let diag = SessionDiagnostics::from_parts(&session, &event_log);
+                            let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                .with_enforcement(&config.enforcement.mode);
                             let text = match config.diagnostics.format {
                                 Fmt::Text => diag.to_text(),
                                 Fmt::JsonStub => diag.to_json_stub(),
@@ -727,6 +879,118 @@ async fn handle_client(
         "session audit log complete"
     );
     Ok(())
+}
+
+/// Evaluate session enforcement and disconnect if required under Strict policy.
+///
+/// Under `ReportOnly`, this function logs the enforcement decision in
+/// diagnostics if the session has failed, then returns `Ok(false)`.
+///
+/// Under `Strict`, if the enforcement decision is not `Allow`:
+/// - Records a `Failed` event in the event log
+/// - Updates the session registry
+/// - Prints diagnostics with enforcement context
+/// - Sends a `Disconnect` message to the client
+/// - Returns `Ok(true)` to signal the caller to stop processing
+///
+/// Returns `Ok(false)` if no enforcement action is taken.
+async fn handle_enforcement(
+    session: &SessionStateMachine,
+    event_log: &mut SessionEventLog,
+    session_id: &session_registry::SessionId,
+    registry: &Arc<std::sync::Mutex<session_registry::SessionRegistry>>,
+    config: &ServerConfig,
+    client_id: Uuid,
+    writer: &mut (impl AsyncWriteExt + Unpin),
+) -> Result<bool> {
+    let policy = &config.enforcement.mode;
+    let decision = evaluate_enforcement(session.state(), session.failure_reason(), policy);
+
+    match policy {
+        SessionEnforcementPolicy::ReportOnly => {
+            if config.diagnostics.print_session_diagnostics
+                && *session.state() == SessionState::Failed
+            {
+                let diag =
+                    SessionDiagnostics::from_parts(session, event_log).with_enforcement(policy);
+                let text = match config.diagnostics.format {
+                    Fmt::Text => diag.to_text(),
+                    Fmt::JsonStub => diag.to_json_stub(),
+                };
+                info!(%client_id, "session diagnostics (enforcement context):\n{text}");
+            }
+            Ok(false)
+        }
+        SessionEnforcementPolicy::Strict => {
+            if decision == SessionEnforcementDecision::Allow {
+                return Ok(false);
+            }
+
+            event_log.record(
+                SessionEventKind::Failed,
+                SessionState::Failed,
+                session.failure_reason().unwrap_or("enforcement triggered"),
+            );
+
+            {
+                let mut reg = registry.lock().unwrap();
+                reg.update_session(session_id, SessionState::Failed, event_log.len());
+            }
+
+            if config.diagnostics.print_session_diagnostics {
+                let diag =
+                    SessionDiagnostics::from_parts(session, event_log).with_enforcement(policy);
+                let text = match config.diagnostics.format {
+                    Fmt::Text => diag.to_text(),
+                    Fmt::JsonStub => diag.to_json_stub(),
+                };
+                info!(%client_id, "session diagnostics (enforcement):\n{text}");
+            }
+
+            let (reason, msg) = map_decision_to_disconnect(&decision);
+            send_direct(
+                writer,
+                &ServerMessage::Disconnect {
+                    reason,
+                    message: msg,
+                },
+            )
+            .await?;
+
+            info!(
+                %client_id,
+                decision = %decision.to_text(),
+                "enforcement: session disconnected"
+            );
+
+            Ok(true)
+        }
+    }
+}
+
+fn map_decision_to_disconnect(decision: &SessionEnforcementDecision) -> (DisconnectReason, String) {
+    match decision {
+        SessionEnforcementDecision::Allow => unreachable!(),
+        SessionEnforcementDecision::WouldDisconnectInvalidFirstMessage => (
+            DisconnectReason::InvalidHandshake,
+            "invalid first message".to_string(),
+        ),
+        SessionEnforcementDecision::WouldDisconnectVersionMismatch { client, server } => (
+            DisconnectReason::ProtocolMismatch,
+            format!("protocol mismatch: client={client} server={server}"),
+        ),
+        SessionEnforcementDecision::WouldDisconnectCapabilityGateFailure { capability } => (
+            DisconnectReason::InvalidHandshake,
+            format!("capability gate failure: {capability}"),
+        ),
+        SessionEnforcementDecision::WouldDisconnectInvalidStateTransition { from, to } => (
+            DisconnectReason::InvalidHandshake,
+            format!("invalid state transition: {from} -> {to}"),
+        ),
+        SessionEnforcementDecision::WouldMarkSessionFailed { reason } => {
+            (DisconnectReason::InvalidHandshake, reason.clone())
+        }
+    }
 }
 
 async fn send_direct<W: AsyncWriteExt + Unpin>(writer: &mut W, msg: &ServerMessage) -> Result<()> {

@@ -1,7 +1,9 @@
 use crate::session::SessionState;
+use serde::Deserialize;
 
 /// Session enforcement policy mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionEnforcementPolicy {
     /// Report only — never enforce, always returns Allow.
     ReportOnly,
@@ -17,23 +19,13 @@ pub enum SessionEnforcementDecision {
     /// Client sent a non-Login message as the first packet.
     WouldDisconnectInvalidFirstMessage,
     /// Protocol version mismatch detected.
-    WouldDisconnectVersionMismatch {
-        client: u32,
-        server: u32,
-    },
+    WouldDisconnectVersionMismatch { client: u32, server: u32 },
     /// Capability gate check would block the session.
-    WouldDisconnectCapabilityGateFailure {
-        capability: String,
-    },
+    WouldDisconnectCapabilityGateFailure { capability: String },
     /// Session state machine received an invalid transition.
-    WouldDisconnectInvalidStateTransition {
-        from: String,
-        to: String,
-    },
+    WouldDisconnectInvalidStateTransition { from: String, to: String },
     /// Session marked as failed for other reasons.
-    WouldMarkSessionFailed {
-        reason: String,
-    },
+    WouldMarkSessionFailed { reason: String },
 }
 
 impl SessionEnforcementDecision {
@@ -43,28 +35,18 @@ impl SessionEnforcementDecision {
             SessionEnforcementDecision::WouldDisconnectInvalidFirstMessage => {
                 "decision: would_disconnect invalid_first_message".to_string()
             }
-            SessionEnforcementDecision::WouldDisconnectVersionMismatch {
-                client,
-                server,
-            } => {
+            SessionEnforcementDecision::WouldDisconnectVersionMismatch { client, server } => {
                 format!(
                     "decision: would_disconnect version_mismatch client={client} server={server}"
                 )
             }
-            SessionEnforcementDecision::WouldDisconnectCapabilityGateFailure {
-                capability,
-            } => {
+            SessionEnforcementDecision::WouldDisconnectCapabilityGateFailure { capability } => {
                 format!(
                     "decision: would_disconnect capability_gate_failure capability={capability}"
                 )
             }
-            SessionEnforcementDecision::WouldDisconnectInvalidStateTransition {
-                from,
-                to,
-            } => {
-                format!(
-                    "decision: would_disconnect invalid_state_transition from={from} to={to}"
-                )
+            SessionEnforcementDecision::WouldDisconnectInvalidStateTransition { from, to } => {
+                format!("decision: would_disconnect invalid_state_transition from={from} to={to}")
             }
             SessionEnforcementDecision::WouldMarkSessionFailed { reason } => {
                 format!("decision: would_mark_session_failed reason={reason}")
@@ -99,23 +81,15 @@ pub fn evaluate_enforcement(
             SessionState::Failed => match failure_reason {
                 Some(reason) if reason.contains("protocol mismatch") => {
                     let (client, server) = extract_versions(reason);
-                    SessionEnforcementDecision::WouldDisconnectVersionMismatch {
-                        client,
-                        server,
-                    }
+                    SessionEnforcementDecision::WouldDisconnectVersionMismatch { client, server }
                 }
                 Some(reason) if reason.contains("invalid state transition") => {
                     let (from, to) = extract_transition(reason);
-                    SessionEnforcementDecision::WouldDisconnectInvalidStateTransition {
-                        from,
-                        to,
-                    }
+                    SessionEnforcementDecision::WouldDisconnectInvalidStateTransition { from, to }
                 }
-                Some(reason) => {
-                    SessionEnforcementDecision::WouldMarkSessionFailed {
-                        reason: reason.to_string(),
-                    }
-                }
+                Some(reason) => SessionEnforcementDecision::WouldMarkSessionFailed {
+                    reason: reason.to_string(),
+                },
                 None => SessionEnforcementDecision::WouldMarkSessionFailed {
                     reason: "unknown failure".to_string(),
                 },
@@ -273,10 +247,7 @@ mod tests {
         assert_eq!(
             decision,
             SessionEnforcementDecision::WouldMarkSessionFailed {
-                reason: format!(
-                    "handshake incomplete at {:?}",
-                    SessionState::HelloReceived
-                ),
+                reason: format!("handshake incomplete at {:?}", SessionState::HelloReceived),
             }
         );
     }
@@ -344,22 +315,20 @@ mod tests {
 
     #[test]
     fn decision_to_text_capability_gate_failure() {
-        let text =
-            SessionEnforcementDecision::WouldDisconnectCapabilityGateFailure {
-                capability: "ResourceAnnouncement".to_string(),
-            }
-            .to_text();
+        let text = SessionEnforcementDecision::WouldDisconnectCapabilityGateFailure {
+            capability: "ResourceAnnouncement".to_string(),
+        }
+        .to_text();
         assert!(text.contains("capability=ResourceAnnouncement"));
     }
 
     #[test]
     fn decision_to_text_invalid_state_transition() {
-        let text =
-            SessionEnforcementDecision::WouldDisconnectInvalidStateTransition {
-                from: "HelloReceived".to_string(),
-                to: "ReadyDryRun".to_string(),
-            }
-            .to_text();
+        let text = SessionEnforcementDecision::WouldDisconnectInvalidStateTransition {
+            from: "HelloReceived".to_string(),
+            to: "ReadyDryRun".to_string(),
+        }
+        .to_text();
         assert!(text.contains("from=HelloReceived"));
         assert!(text.contains("to=ReadyDryRun"));
     }
