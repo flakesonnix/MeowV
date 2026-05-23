@@ -30,6 +30,17 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 1.9
+
+Protocol capability-gated resource flow:
+
+- capability gate helpers (`profile_supports_capability`, `shared_capabilities`,
+  `requires_capability`, `capability_gate_report`)
+- server logs capability gate before `ResourceAnnouncement` and `JoinGateDecision`
+- client prints local capabilities on connect and `--protocol-negotiation`
+- report-only: no enforcement, no disconnects, no behaviour change
+- docs explaining gate model and future activation path
+
 ## Milestone 1.0
 
 Resource registry:
