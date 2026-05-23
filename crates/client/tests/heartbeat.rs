@@ -2,6 +2,7 @@ use anyhow::Result;
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, time::Duration};
 use protocol::{ClientMessage, ServerMessage, PROTOCOL_VERSION, decode_server_line, encode_line};
 use server::{run_with_listener_and_state, ServerConfig, ServerSection, SharedState};
+use client::heartbeat;
 use std::sync::Arc;
 
 fn server_config(addr: &str) -> ServerConfig {
