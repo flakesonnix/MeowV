@@ -17,3 +17,6 @@ toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 base64.workspace = true
+
+[dev-dependencies]
+server = { path = "../server" }
