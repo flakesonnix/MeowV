@@ -153,6 +153,40 @@ pub struct LoadOrder {
     pub resources: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceRuntimePhase {
+    Planned,
+    Validated,
+    Ready,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceEntrypointKind {
+    Server,
+    Client,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedEntrypoint {
+    pub kind: ResourceEntrypointKind,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedResource {
+    pub name: String,
+    pub root_dir: PathBuf,
+    pub phase: ResourceRuntimePhase,
+    pub entrypoints: Vec<PlannedEntrypoint>,
+    pub dependencies: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceLoadPlan {
+    pub resources: Vec<PlannedResource>,
+}
+
 pub fn load_manifest_from_path(path: impl AsRef<Path>) -> Result<ResourceManifest> {
     let path = path.as_ref();
     let raw = fs::read_to_string(path)
@@ -459,6 +493,56 @@ pub fn validate_registry(registry: &ResourceRegistry) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn build_load_plan(
+    registry: &ResourceRegistry,
+    load_order: &LoadOrder,
+) -> Result<ResourceLoadPlan> {
+    let mut resources = Vec::with_capacity(load_order.resources.len());
+
+    for name in &load_order.resources {
+        let resource = registry
+            .resources
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("load order references missing resource: {name}"))?;
+        let mut entrypoints = Vec::new();
+
+        if let Some(server) = &resource.manifest.entrypoints.server {
+            entrypoints.push(PlannedEntrypoint {
+                kind: ResourceEntrypointKind::Server,
+                path: PathBuf::from(server),
+            });
+        }
+
+        if let Some(client) = &resource.manifest.entrypoints.client {
+            entrypoints.push(PlannedEntrypoint {
+                kind: ResourceEntrypointKind::Client,
+                path: PathBuf::from(client),
+            });
+        }
+
+        resources.push(PlannedResource {
+            name: resource.name.clone(),
+            root_dir: resource.root_dir.clone(),
+            phase: ResourceRuntimePhase::Planned,
+            entrypoints,
+            dependencies: resource
+                .manifest
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.name.clone())
+                .collect(),
+        });
+    }
+
+    Ok(ResourceLoadPlan { resources })
+}
+
+pub fn build_load_plan_from_root(root_dir: impl AsRef<Path>) -> Result<ResourceLoadPlan> {
+    let registry = discover_resources(root_dir)?;
+    let load_order = resolve_load_order(&registry)?;
+    build_load_plan(&registry, &load_order)
 }
 
 fn insert_registered_resource(
@@ -1030,6 +1114,112 @@ mod tests {
         let registry = discover_resources(&root).unwrap();
         let order = resolve_load_order(&registry).unwrap();
         assert_eq!(order.resources, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn build_load_plan_from_valid_registry() {
+        let root = create_registry_root(&[
+            ("chat", registry_manifest("chat", &[])),
+            ("scoreboard", registry_manifest("scoreboard", &["chat"])),
+        ]);
+
+        let registry = discover_resources(&root).unwrap();
+        let order = resolve_load_order(&registry).unwrap();
+        let plan = build_load_plan(&registry, &order).unwrap();
+        assert_eq!(plan.resources.len(), 2);
+    }
+
+    #[test]
+    fn load_plan_order_matches_dependency_order() {
+        let root = create_registry_root(&[
+            ("chat", registry_manifest("chat", &[])),
+            ("scoreboard", registry_manifest("scoreboard", &["chat"])),
+            ("admin", registry_manifest("admin", &["chat", "scoreboard"])),
+        ]);
+
+        let plan = build_load_plan_from_root(&root).unwrap();
+        let names: Vec<_> = plan
+            .resources
+            .iter()
+            .map(|resource| resource.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["chat", "scoreboard", "admin"]);
+    }
+
+    #[test]
+    fn includes_server_entrypoints() {
+        let root = create_registry_root(&[("chat", registry_manifest("chat", &[]))]);
+
+        let plan = build_load_plan_from_root(&root).unwrap();
+        assert!(plan.resources[0]
+            .entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.kind == ResourceEntrypointKind::Server));
+    }
+
+    #[test]
+    fn includes_client_entrypoints() {
+        let root = create_registry_root(&[("chat", registry_manifest("chat", &[]))]);
+
+        let plan = build_load_plan_from_root(&root).unwrap();
+        assert!(plan.resources[0]
+            .entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint.kind == ResourceEntrypointKind::Client));
+    }
+
+    #[test]
+    fn resource_phase_defaults_to_planned() {
+        let root = create_registry_root(&[("chat", registry_manifest("chat", &[]))]);
+
+        let plan = build_load_plan_from_root(&root).unwrap();
+        assert_eq!(plan.resources[0].phase, ResourceRuntimePhase::Planned);
+    }
+
+    #[test]
+    fn missing_resource_in_load_order_returns_error() {
+        let root = create_registry_root(&[("chat", registry_manifest("chat", &[]))]);
+        let registry = discover_resources(&root).unwrap();
+        let order = LoadOrder {
+            resources: vec!["missing".to_string()],
+        };
+
+        let err = build_load_plan(&registry, &order).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("load order references missing resource"));
+    }
+
+    #[test]
+    fn deterministic_output_order() {
+        let root = create_registry_root(&[
+            ("zeta", registry_manifest("zeta", &[])),
+            ("alpha", registry_manifest("alpha", &[])),
+        ]);
+
+        let plan = build_load_plan_from_root(&root).unwrap();
+        let names: Vec<_> = plan
+            .resources
+            .iter()
+            .map(|resource| resource.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn no_file_contents_are_read_or_executed_by_design() {
+        let root = create_registry_root(&[("chat", registry_manifest("chat", &[]))]);
+
+        let plan = build_load_plan_from_root(&root).unwrap();
+        assert_eq!(plan.resources[0].entrypoints.len(), 2);
+        assert_eq!(
+            plan.resources[0].entrypoints[0].path,
+            PathBuf::from("server/main.js")
+        );
+        assert_eq!(
+            plan.resources[0].entrypoints[1].path,
+            PathBuf::from("client/main.js")
+        );
     }
 
     fn valid_manifest() -> &'static str {
