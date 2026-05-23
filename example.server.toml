@@ -1,3 +1,45 @@
-bind = "127.0.0.1:7000"
+# MeowV local development server configuration.
+# Run: cargo run --bin server -- --config example.server.toml
+
+[server]
+# Address and port the server binds to.
+bind_addr = "127.0.0.1:30120"
+# Human-readable server name (not used in the protocol yet).
+name = "MeowV Local Dev Server"
+# Entity snapshot tick rate in ticks per second.
 tick_rate = 10
-motd = "welcome from example config"
+# Message shown to clients on connect.
+motd = "welcome to meowv milestone 0"
+
+[protocol]
+# Exact protocol version match is required. Must remain true; relaxing
+# version matching is not supported in this milestone.
+exact_version_required = true
+# Protocol negotiation runs in dry-run mode only; no enforcement.
+# Must remain true; active enforcement is not yet implemented.
+negotiation_dry_run = true
+# Capability gates log their status but do not block. Report-only.
+capability_gates_report_only = true
+
+[resources]
+# Path to the resource pack directory used for the server announcement.
+# Relative paths are resolved from the workspace root.
+# Must not contain '..'.
+announcement_resource_dir = "examples/resources/chat"
+# Path to the local resource cache directory (used by the client, not the
+# server directly in this milestone).
+cache_dir = "examples/cache/chat-valid"
+
+[join_gate]
+# Join gate policy mode. Only "dry_run" is supported in this milestone.
+mode = "dry_run"
+# Enforcing required resources is not yet implemented. Must be false.
+enforce_required_resources = false
+
+[diagnostics]
+# Print a structured session diagnostics dump at ReadyDryRun and Failed.
+print_session_diagnostics = true
+# Print the full event log alongside the diagnostics (verbose).
+print_event_log = false
+# Diagnostics output format: "text" or "json_stub".
+format = "text"
