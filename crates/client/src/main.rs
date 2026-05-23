@@ -2,6 +2,7 @@ use std::env;
 
 use anyhow::{Context, Result};
 use protocol::{decode_server_line, encode_line, ClientMessage, PROTOCOL_VERSION};
+use resource_manifest::{load_manifest_from_path, ResourceManifest};
 use serde::Deserialize;
 use server_browser::{filter_current_protocol, LocalJsonServerListSource, ServerListSource};
 use tokio::{
@@ -78,6 +79,11 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(path) = read_flag(&args, "--resource-manifest") {
+        print_resource_manifest(&path)?;
+        return Ok(());
+    }
+
     let config = ClientConfig::load(&args)?;
 
     let stream = TcpStream::connect(&config.addr).await?;
@@ -135,12 +141,69 @@ fn print_server_list(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn print_resource_manifest(path: &str) -> Result<()> {
+    let manifest = load_manifest_from_path(path)?;
+
+    println!("Name: {}", manifest.name);
+    println!("Version: {}", manifest.version);
+    println!(
+        "Description: {}",
+        manifest.description.as_deref().unwrap_or("<none>")
+    );
+    println!("Authors: {}", manifest.authors.join(", "));
+    println!(
+        "License: {}",
+        manifest.license.as_deref().unwrap_or("<none>")
+    );
+    println!("Protocol: {}", manifest.protocol_version);
+    println!("Edition: {}", format_manifest_edition(&manifest));
+    println!(
+        "Server Entrypoint: {}",
+        manifest.entrypoints.server.as_deref().unwrap_or("<none>")
+    );
+    println!(
+        "Client Entrypoint: {}",
+        manifest.entrypoints.client.as_deref().unwrap_or("<none>")
+    );
+    println!(
+        "Dependencies: {}",
+        format_dependencies(&manifest).unwrap_or_else(|| "<none>".to_string())
+    );
+    println!("Tags: {}", manifest.tags.join(", "));
+
+    Ok(())
+}
+
 fn format_edition(edition: &server_browser::EditionCompatibility) -> &'static str {
     match edition {
         server_browser::EditionCompatibility::Legacy => "legacy",
         server_browser::EditionCompatibility::Enhanced => "enhanced",
         server_browser::EditionCompatibility::Any => "any",
         server_browser::EditionCompatibility::Unknown => "unknown",
+    }
+}
+
+fn format_manifest_edition(manifest: &ResourceManifest) -> &'static str {
+    match manifest.edition_compatibility {
+        resource_manifest::EditionCompatibility::Legacy => "legacy",
+        resource_manifest::EditionCompatibility::Enhanced => "enhanced",
+        resource_manifest::EditionCompatibility::Any => "any",
+        resource_manifest::EditionCompatibility::Unknown => "unknown",
+    }
+}
+
+fn format_dependencies(manifest: &ResourceManifest) -> Option<String> {
+    if manifest.dependencies.is_empty() {
+        None
+    } else {
+        Some(
+            manifest
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
     }
 }
 

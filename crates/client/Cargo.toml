@@ -7,6 +7,7 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 protocol = { path = "../protocol" }
+resource_manifest = { path = "../resource_manifest" }
 server_browser = { path = "../server_browser" }
 serde.workspace = true
 tokio.workspace = true
