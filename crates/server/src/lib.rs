@@ -343,6 +343,7 @@ fn build_example_resource_announcement() -> Option<ResourceAnnouncement> {
             protocol_version: index.manifest.protocol_version,
             requirement_level: ResourceRequirementLevel::Required,
         }],
+        signature: None,
     })
 }
 

@@ -2,9 +2,10 @@ use std::env;
 
 use anyhow::{Context, Result};
 use protocol::{
-    decode_server_line, encode_line, AnnouncedResource, ClientMessage, JoinGateDecision,
-    JoinGateMode, JoinGateOutcome, ResourceAvailabilityEntry, ResourceAvailabilityReport,
-    ResourceAvailabilityStatus, ServerMessage, PROTOCOL_VERSION,
+    check_announcement_signature_stub, decode_server_line, encode_line, AnnouncedResource,
+    ClientMessage, JoinGateDecision, JoinGateMode, JoinGateOutcome, ResourceAvailabilityEntry,
+    ResourceAvailabilityReport, ResourceAvailabilityStatus, ServerMessage,
+    SignatureVerificationStatus, PROTOCOL_VERSION,
 };
 use resource_manifest::{
     build_load_plan_from_root, build_pack_index, discover_resources, load_manifest_from_path,
@@ -155,6 +156,8 @@ async fn main() -> Result<()> {
         let packet = decode_server_line(&line)?;
         match packet {
             ServerMessage::ResourceAnnouncement(announcement) => {
+                let signature_report = check_announcement_signature_stub(&announcement);
+                print_signature_report(&signature_report);
                 let report =
                     handle_resource_announcement(&announcement, config.resource_cache.as_deref())?;
                 writer_half
@@ -577,6 +580,24 @@ fn summarize_list(values: &[String]) -> String {
         "<none>".to_string()
     } else {
         values.join(", ")
+    }
+}
+
+fn print_signature_report(report: &protocol::SignatureVerificationReport) {
+    println!(
+        "Announcement Signature Status: {}",
+        format_signature_status(&report.status)
+    );
+    println!("Signature Reason: {}", report.reason);
+}
+
+fn format_signature_status(status: &SignatureVerificationStatus) -> &'static str {
+    match status {
+        SignatureVerificationStatus::NotProvided => "not_provided",
+        SignatureVerificationStatus::UnsupportedAlgorithm => "unsupported_algorithm",
+        SignatureVerificationStatus::Invalid => "invalid",
+        SignatureVerificationStatus::Valid => "valid",
+        SignatureVerificationStatus::NotChecked => "not_checked",
     }
 }
 
