@@ -20,6 +20,16 @@ Protocol hardening:
 - better config files
 - integration tests
 
+## Milestone 1.8
+
+Protocol compatibility negotiation design:
+
+- dry-run negotiation data structures
+- version ranges, capability flags
+- intersection/evaluation logic
+- server/client dry-run reporting
+- docs explaining future activation path
+
 ## Milestone 1.0
 
 Resource registry:
