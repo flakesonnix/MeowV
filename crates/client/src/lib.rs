@@ -25,20 +25,7 @@ pub async fn heartbeat_loop(
         tokio::select! {
             _ = tokio::time::sleep(interval) => {
                 // Acquire locks for writer and reader, then perform ping+wait.
-                let mut wguard = match writer.lock().await.try_lock_owned() {
-                    Ok(g) => g,
-                    Err(_) => {
-                        // fallback to regular lock if try_lock_owned not available
-                        let mut g = writer.lock().await;
-                        // use unsafe transmute? not needed — we'll hold the guard
-                        // by shadowing. Use assignment.
-                        // Note: we can't move g out easily. Instead, use block.
-                        // We'll just use g directly below by creating a scope.
-                        drop(g);
-                        let mut g = writer.lock().await;
-                        g
-                    }
-                };
+                let mut wguard = writer.lock().await;
                 // Lock lines
                 let mut lguard = lines.lock().await;
                 // Call the helper with mutable refs
