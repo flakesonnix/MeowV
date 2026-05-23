@@ -39,8 +39,8 @@ async fn heartbeat_loop_sends_multiple_pings() -> Result<()> {
 
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
-    tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await;
+    let handle = tokio::spawn(async move {
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await
     });
 
     // Let a few heartbeats run
@@ -48,6 +48,12 @@ async fn heartbeat_loop_sends_multiple_pings() -> Result<()> {
 
     // stop the loop
     let _ = stop_tx.send(());
+
+    let metrics = tokio::time::timeout(tokio::time::Duration::from_millis(300), handle).await??;
+    assert!(metrics.sent_count >= 1);
+    assert!(metrics.pong_count >= 1);
+    assert_eq!(metrics.timeout_or_error_count, 0);
+    assert_eq!(metrics.last_ping_sequence, metrics.last_pong_sequence);
 
     server_task.abort();
     Ok(())
@@ -81,7 +87,7 @@ async fn heartbeat_loop_stops_when_stop_signal_received() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await;
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await
     });
 
     // let it run briefly
@@ -90,7 +96,8 @@ async fn heartbeat_loop_stops_when_stop_signal_received() -> Result<()> {
     // send stop and ensure task completes within reasonable time
     let _ = stop_tx.send(());
     let res = tokio::time::timeout(tokio::time::Duration::from_millis(300), handle).await;
-    assert!(res.is_ok(), "heartbeat task did not stop after stop signal");
+    let metrics = res.expect("heartbeat task did not stop after stop signal")?;
+    assert!(metrics.sent_count >= 1);
 
     server_task.abort();
     Ok(())
@@ -127,13 +134,16 @@ async fn heartbeat_shutdown_does_not_require_stdin_eof() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await;
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await
     });
 
     // stop immediately without touching stdin
     let _ = stop_tx.send(());
     let res = tokio::time::timeout(tokio::time::Duration::from_millis(300), handle).await;
-    assert!(res.is_ok(), "heartbeat task did not stop after stop signal (no stdin)");
+    let metrics = res.expect("heartbeat task did not stop after stop signal (no stdin)")?;
+    assert_eq!(metrics.sent_count, 0);
+    assert_eq!(metrics.pong_count, 0);
+    assert_eq!(metrics.timeout_or_error_count, 0);
 
     server_task.abort();
     Ok(())

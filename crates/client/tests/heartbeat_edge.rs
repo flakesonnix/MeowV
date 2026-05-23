@@ -60,13 +60,14 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
 
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
-    tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(20), stop_rx).await;
+    let handle = tokio::spawn(async move {
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(20), stop_rx).await
     });
 
     // let a few pings happen
     sleep(tokio::time::Duration::from_millis(220)).await;
     let _ = stop_tx.send(());
+    let metrics = tokio::time::timeout(tokio::time::Duration::from_millis(300), handle).await??;
 
     // check seen sequences
     let seqs = seen.lock().await.clone();
@@ -75,6 +76,9 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
     for (i, s) in seqs.iter().enumerate() {
         assert_eq!(*s, (i as u64) + 1);
     }
+    assert_eq!(metrics.sent_count as usize, seqs.len());
+    assert_eq!(metrics.pong_count as usize, seqs.len());
+    assert_eq!(metrics.timeout_or_error_count, 0);
 
     // cleanup
     server.abort();
@@ -132,17 +136,22 @@ async fn heartbeat_loop_timeout_continues_without_disconnect() -> Result<()> {
 
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
-    tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(10), stop_rx).await;
+    let handle = tokio::spawn(async move {
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(10), stop_rx).await
     });
 
     // let a few pings happen
     sleep(tokio::time::Duration::from_millis(220)).await;
     let _ = stop_tx.send(());
+    let metrics = tokio::time::timeout(tokio::time::Duration::from_millis(300), handle).await??;
 
     // ensure multiple pings recorded despite no pongs
     let seqs = seen.lock().await.clone();
     assert!(seqs.len() >= 2, "expected at least 2 pings recorded, got {}", seqs.len());
+    assert!(metrics.sent_count >= 2);
+    assert_eq!(metrics.pong_count, 0);
+    assert!(metrics.timeout_or_error_count >= 2);
+    assert_eq!(metrics.last_pong_sequence, None);
 
     server.abort();
     Ok(())
