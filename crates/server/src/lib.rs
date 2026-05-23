@@ -615,6 +615,11 @@ async fn handle_client(
                     session.state().clone(),
                     format!("heartbeat: sent pong {}", sequence),
                 );
+                state.registry.lock().unwrap().update_session_heartbeat_counts(
+                    &session_id,
+                    event_log.count_kind(SessionEventKind::PingReceived),
+                    event_log.count_kind(SessionEventKind::PongSent),
+                );
             }
             ClientMessage::Login { .. } => {
                 warn!(%client_id, "ignoring duplicate login packet");

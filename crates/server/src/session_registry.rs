@@ -27,6 +27,8 @@ pub struct SessionRegistryEntry {
     pub ready_dry_run: bool,
     pub failed: bool,
     pub protocol_version: Option<u32>,
+    pub ping_received_count: usize,
+    pub pong_sent_count: usize,
 }
 
 /// Point-in-time aggregate snapshot of all registered sessions.
@@ -57,8 +59,9 @@ impl SessionRegistrySnapshot {
                 None => "protocol=unknown".to_string(),
             };
             lines.push(format!(
-                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}",
+                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  ping_rx={}  pong_tx={}",
                 entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed, proto,
+                entry.ping_received_count, entry.pong_sent_count,
             ));
         }
         lines.join("\n")
@@ -94,6 +97,8 @@ impl SessionRegistry {
                 ready_dry_run: false,
                 failed: false,
                 protocol_version: None,
+                ping_received_count: 0,
+                pong_sent_count: 0,
             },
         );
         id
@@ -119,6 +124,19 @@ impl SessionRegistry {
     pub fn update_session_event_count(&mut self, id: &SessionId, event_count: usize) {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.event_count = event_count;
+        }
+    }
+
+    /// Update heartbeat counts derived from the session event log.
+    pub fn update_session_heartbeat_counts(
+        &mut self,
+        id: &SessionId,
+        ping_received: usize,
+        pong_sent: usize,
+    ) {
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.ping_received_count = ping_received;
+            entry.pong_sent_count = pong_sent;
         }
     }
 
@@ -365,6 +383,57 @@ mod tests {
         assert!(!text.contains("addr"));
         assert!(!text.contains("peer"));
         assert!(!text.contains("name"));
+    }
+
+    #[test]
+    fn new_session_has_zero_heartbeat_counts() {
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        assert_eq!(snap.sessions[0].ping_received_count, 0);
+        assert_eq!(snap.sessions[0].pong_sent_count, 0);
+    }
+
+    #[test]
+    fn update_heartbeat_counts_reflected_in_snapshot() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 3, 3);
+        let snap = reg.snapshot();
+        assert_eq!(snap.sessions[0].ping_received_count, 3);
+        assert_eq!(snap.sessions[0].pong_sent_count, 3);
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_zero_heartbeat_counts() {
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("ping_rx=0"));
+        assert!(text.contains("pong_tx=0"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_nonzero_heartbeat_counts() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 1, 1);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("ping_rx=1"));
+        assert!(text.contains("pong_tx=1"));
+    }
+
+    #[test]
+    fn heartbeat_counts_independent_per_session() {
+        let mut reg = SessionRegistry::new();
+        let id1 = reg.create_session();
+        let id2 = reg.create_session();
+        reg.update_session_heartbeat_counts(&id1, 2, 2);
+        let snap = reg.snapshot();
+        let e1 = snap.sessions.iter().find(|e| e.id == id1).unwrap();
+        let e2 = snap.sessions.iter().find(|e| e.id == id2).unwrap();
+        assert_eq!(e1.ping_received_count, 2);
+        assert_eq!(e2.ping_received_count, 0);
     }
 
     #[test]
