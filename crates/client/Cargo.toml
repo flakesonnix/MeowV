@@ -20,3 +20,4 @@ base64.workspace = true
 
 [dev-dependencies]
 server = { path = "../server" }
+uuid = { workspace = true }

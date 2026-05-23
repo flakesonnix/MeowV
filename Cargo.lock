@@ -73,11 +73,13 @@ dependencies = [
  "resource_manifest",
  "serde",
  "serde_json",
+ "server",
  "server_browser",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
