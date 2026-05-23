@@ -2,7 +2,10 @@ use std::env;
 
 use anyhow::{Context, Result};
 use protocol::{decode_server_line, encode_line, ClientMessage, PROTOCOL_VERSION};
-use resource_manifest::{build_pack_index, load_manifest_from_path, ResourceManifest};
+use resource_manifest::{
+    build_pack_index, load_manifest_from_path, verify_cache_for_resource, CacheFileStatus,
+    ResourceManifest,
+};
 use serde::Deserialize;
 use server_browser::{filter_current_protocol, LocalJsonServerListSource, ServerListSource};
 use tokio::{
@@ -86,6 +89,11 @@ async fn main() -> Result<()> {
 
     if let Some(path) = read_flag(&args, "--resource-index") {
         print_resource_index(&path)?;
+        return Ok(());
+    }
+
+    if let Some((resource_dir, cache_dir)) = read_pair_flag(&args, "--verify-cache") {
+        print_cache_verification(&resource_dir, &cache_dir)?;
         return Ok(());
     }
 
@@ -199,6 +207,41 @@ fn print_resource_index(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn print_cache_verification(resource_dir: &str, cache_dir: &str) -> Result<()> {
+    let report = verify_cache_for_resource(resource_dir, cache_dir)?;
+
+    println!("Valid: {}", report.valid_count);
+    println!("Missing: {}", report.missing_count);
+    println!("Size Mismatch: {}", report.size_mismatch_count);
+    println!("Hash Mismatch: {}", report.hash_mismatch_count);
+
+    for entry in &report.entries {
+        println!(
+            "- {} | {} | expected {} bytes | actual {} bytes | expected {} | actual {}",
+            entry.relative_path.display(),
+            format_cache_status(&entry.status),
+            entry.expected_size_bytes,
+            entry
+                .actual_size_bytes
+                .map(|size| size.to_string())
+                .unwrap_or_else(|| "<missing>".to_string()),
+            entry.expected_sha256,
+            entry.actual_sha256.as_deref().unwrap_or("<missing>")
+        );
+    }
+
+    println!(
+        "Result: {}",
+        if report.is_fully_valid {
+            "OK"
+        } else {
+            "FAILED"
+        }
+    );
+
+    Ok(())
+}
+
 fn format_edition(edition: &server_browser::EditionCompatibility) -> &'static str {
     match edition {
         server_browser::EditionCompatibility::Legacy => "legacy",
@@ -214,6 +257,15 @@ fn format_manifest_edition(manifest: &ResourceManifest) -> &'static str {
         resource_manifest::EditionCompatibility::Enhanced => "enhanced",
         resource_manifest::EditionCompatibility::Any => "any",
         resource_manifest::EditionCompatibility::Unknown => "unknown",
+    }
+}
+
+fn format_cache_status(status: &CacheFileStatus) -> &'static str {
+    match status {
+        CacheFileStatus::Valid => "valid",
+        CacheFileStatus::Missing => "missing",
+        CacheFileStatus::SizeMismatch => "size_mismatch",
+        CacheFileStatus::HashMismatch => "hash_mismatch",
     }
 }
 
@@ -244,4 +296,10 @@ fn read_flag(args: &[String], name: &str) -> Option<String> {
     args.windows(2)
         .find(|window| window[0] == name)
         .map(|window| window[1].clone())
+}
+
+fn read_pair_flag(args: &[String], name: &str) -> Option<(String, String)> {
+    args.windows(3)
+        .find(|window| window[0] == name)
+        .map(|window| (window[1].clone(), window[2].clone()))
 }
