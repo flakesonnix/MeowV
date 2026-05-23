@@ -46,17 +46,17 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
-struct ClientInfo {
-    name: String,
-    entity_id: u32,
-    last_announcement: Option<ResourceAnnouncement>,
-    shared_caps: Vec<ProtocolCapability>,
+pub struct ClientInfo {
+    pub name: String,
+    pub entity_id: u32,
+    pub last_announcement: Option<ResourceAnnouncement>,
+    pub shared_caps: Vec<ProtocolCapability>,
 }
 
-struct SharedState {
-    clients: RwLock<HashMap<Uuid, ClientInfo>>,
-    registry: Arc<std::sync::Mutex<session_registry::SessionRegistry>>,
-    shutdown: std::sync::Mutex<shutdown::ShutdownState>,
+pub struct SharedState {
+    pub clients: RwLock<HashMap<Uuid, ClientInfo>>,
+    pub registry: Arc<std::sync::Mutex<session_registry::SessionRegistry>>,
+    pub shutdown: std::sync::Mutex<shutdown::ShutdownState>,
 }
 
 impl Default for SharedState {
@@ -102,7 +102,14 @@ pub async fn run(config: ServerConfig) -> Result<()> {
 }
 
 pub async fn run_with_listener(listener: TcpListener, config: ServerConfig) -> Result<()> {
-    let state = Arc::new(SharedState::default());
+    run_with_listener_and_state(listener, config, Arc::new(SharedState::default())).await
+}
+
+pub async fn run_with_listener_and_state(
+    listener: TcpListener,
+    config: ServerConfig,
+    state: Arc<SharedState>,
+) -> Result<()> {
     let (tx, _) = broadcast::channel(256);
 
     spawn_tick_loop(config.clone(), state.clone(), tx.clone());

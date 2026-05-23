@@ -31,8 +31,8 @@
 | 2.5 | Local admin commands — stdin parser, 6 commands, oneshot quit |
 | 2.6 | Runtime status snapshot — ServerRuntimeStatus, admin status/sessions live |
 | 2.7 | Live session registry — BTreeMap-backed, SessionGuard RAII |
-| 2.8 | Admin diagnostics — registry-backed diagnostics command |
-| 2.9 | Graceful shutdown — ShutdownState, ShutdownSummary, final log dump |
+| 2.8 | Full handshake integration assertions — session, event log, registry, diagnostics consistent |
+| 2.9 | Admin sessions command — registry-backed per-session state listing |
 
 ### 3.x — Next Phase Candidates
 
@@ -49,6 +49,7 @@
 | 3.8 | Signature verification engine — real Ed25519 crypto, consumes M3.7 plan, report-only |
 | 3.9 | Wire signature verification into resource flow — client CLI + live path, report-only |
 | 4.0 | Strict signature enforcement gate — `SignaturePolicy`, evaluate + reject under strict, report-only by default |
+| 4.1 | Trust key UX + policy validation — `KeyConfigError`, validate config, strict requires keys, key summary |
 
 ---
 
@@ -243,6 +244,21 @@ Strict signature enforcement gate:
 - No downloads, no cache writes, no execution, no silent fallback
 - `docs/strict-signature-policy.md` — new doc
 
+## Milestone 4.1
+
+Trust key UX + policy validation:
+
+- `KeyConfigError` enum: `EmptyConfig`, `DuplicateKeyId`, `UnsupportedAlgorithm`, `MalformedKeyMaterial` — with Display
+- `validate_trusted_key_config(&[TrustedPublicKey]) -> Result<(), KeyConfigError>` — rejects empty, duplicate key IDs, unsupported algorithms, wrong key material length
+- Client CLI validates loaded keys with `validate_trusted_key_config`
+- `print_trusted_keys_summary` — prints count + key IDs
+- `--signature-policy strict` requires `--trusted-keys <path>` or fails with clear error
+- `--signature-policy report-only` with no trusted keys prints informational warning
+- 6 new protocol unit tests (108 protocol tests total)
+- 313 workspace tests passing
+- No downloads, no cache writes, no execution, no silent downgrade
+- `docs/strict-signature-policy.md` updated
+
 ---
 
 ## Milestone 0
@@ -277,32 +293,30 @@ Protocol compatibility negotiation design:
 
 ## Milestone 2.9
 
-Graceful shutdown state flow:
+Admin sessions command — live per-session state from registry:
 
-- `ShutdownReason` enum (`AdminQuit`, `InternalError`, `TestRequested`) with Display
-- `ShutdownState` — in-memory shutdown flag with first-wins reason; `new()`, `request(reason)`, `is_requested()`, `reason()`
-- `ShutdownSummary` — reason + runtime status text + registry diagnostics text
-- `build_shutdown_summary(config, registry_snapshot, reason)` — deterministic helper using existing `ServerRuntimeStatus` and `SessionRegistrySnapshot`
-- `SharedState` gains `shutdown: Mutex<ShutdownState>`
-- `admin_stdin_loop` calls `shutdown.request(AdminQuit)` before sending quit signal
-- `run_with_listener` logs final shutdown summary after accept loop exits (reason, status dump, registry dump)
-- Local-only: no remote API, no persistence, no telemetry, no file writes
-- No IP addresses or personal data in shutdown summary
-- 15 new shutdown unit tests (state not requested, request sets reason, repeated request keeps first, summary includes reason/status/registry, deterministic, no personal data, Display for all reasons)
-- `docs/graceful-shutdown.md`
-
-## Milestone 2.8
-
-Admin diagnostics backed by live session registry:
-
-- `SessionRegistrySnapshot::to_diagnostics_text()` — deterministic multi-line diagnostics output from registry snapshot
+- `diagnostics` admin command: prints live per-session state from `SessionRegistrySnapshot::to_diagnostics_text()`
 - `handle_admin_command_with_context(command, status, registry)` — full-context handler accepting optional registry snapshot
 - `handle_admin_command` and `handle_admin_command_with_status` delegate to `handle_admin_command_with_context`
-- Admin `diagnostics` command emits live per-session state (session ID, state, event count, ready_dry_run, failed)
+- Per-session output: session ID, state, event count, ready_dry_run, failed
 - No IP addresses, timestamps, or personal data in diagnostics output
 - Local-only, admin-only: no remote API, no persistence, no telemetry
 - 7 admin unit tests (diagnostics with empty / connected / ready_dry_run / failed registry)
-- 7 registry unit tests (`to_diagnostics_text`)
+
+## Milestone 2.8
+
+Full handshake integration assertions:
+
+- New `crates/server/tests/handshake_observability.rs` — 4 integration tests
+- `SharedState` and `ClientInfo` made pub for test inspection
+- `run_with_listener_and_state()` — test helper exposing Arc<SharedState> for registry observation
+- Tests cover:
+  - `full_handshake_creates_session_and_reaches_ready_dry_run`: asserts session created, state=ReadyDryRun, event_count=11, registry cleaned after disconnect
+  - `version_mismatch_disconnects_and_cleans_up_session`: asserts Disconnect + session cleanup
+  - `invalid_handshake_first_message_not_login`: asserts InvalidHandshake disconnect + cleanup
+  - `registry_session_id_is_deterministic`: asserts deterministic session-1 ID
+- 4 new integration tests, 317 workspace tests passing
+- No behavior changes, no protocol changes, no wire format changes
 
 ## Milestone 2.7
 
