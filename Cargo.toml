@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/game_edition",
+  "crates/resource_manifest",
   "crates/server_browser",
   "crates/protocol",
   "crates/server",
