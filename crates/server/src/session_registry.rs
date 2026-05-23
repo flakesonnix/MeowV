@@ -37,6 +37,29 @@ pub struct SessionRegistrySnapshot {
     pub sessions: Vec<SessionRegistryEntry>,
 }
 
+impl SessionRegistrySnapshot {
+    /// Deterministic diagnostics text from snapshot. No timestamps, IPs, or personal data.
+    pub fn to_diagnostics_text(&self) -> String {
+        if self.sessions.is_empty() {
+            return format!(
+                "sessions: {}\n(no active sessions)",
+                self.connected_sessions
+            );
+        }
+        let mut lines = vec![format!(
+            "sessions: {}  ready_dry_run: {}  failed: {}",
+            self.connected_sessions, self.ready_dry_run_sessions, self.failed_sessions,
+        )];
+        for entry in &self.sessions {
+            lines.push(format!(
+                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}",
+                entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed,
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
 /// In-memory live session registry.
 /// Keyed by monotonic `SessionId`. BTreeMap ensures deterministic snapshot ordering.
 /// Local only; never persisted or exposed over a network.
@@ -274,5 +297,70 @@ mod tests {
         assert_eq!(snap2.connected_sessions, 1);
         assert_eq!(snap2.ready_dry_run_sessions, 0);
         assert_eq!(snap2.failed_sessions, 1);
+    }
+
+    #[test]
+    fn to_diagnostics_text_empty_registry() {
+        let reg = SessionRegistry::new();
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("sessions: 0"));
+        assert!(text.contains("no active sessions"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_is_deterministic() {
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        assert_eq!(snap.to_diagnostics_text(), snap.to_diagnostics_text());
+    }
+
+    #[test]
+    fn to_diagnostics_text_includes_session_ids() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains(&id.to_string()));
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_ready_dry_run() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_state(&id, SessionState::ReadyDryRun);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("ready_dry_run=true"));
+        assert!(text.contains("ReadyDryRun"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_failed() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_state(&id, SessionState::Failed);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("failed=true"));
+        assert!(text.contains("Failed"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_omits_ip_and_personal_data() {
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(!text.contains("ip"));
+        assert!(!text.contains("addr"));
+        assert!(!text.contains("peer"));
+        assert!(!text.contains("name"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_does_not_mutate_snapshot() {
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let count_before = snap.connected_sessions;
+        let _ = snap.to_diagnostics_text();
+        assert_eq!(snap.connected_sessions, count_before);
     }
 }
