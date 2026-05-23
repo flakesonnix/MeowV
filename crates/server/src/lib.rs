@@ -2,9 +2,10 @@ use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use protocol::{
-    decode_client_line, encode_line, ClientMessage, DisconnectReason, EntityState, Position,
-    ServerMessage, PROTOCOL_VERSION,
+    decode_client_line, encode_line, AnnouncedResource, AnnouncedResourceFile, ClientMessage,
+    DisconnectReason, EntityState, Position, ResourceAnnouncement, ServerMessage, PROTOCOL_VERSION,
 };
+use resource_manifest::build_pack_index;
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -207,6 +208,14 @@ async fn handle_client(
     )
     .await?;
 
+    if let Some(announcement) = build_example_resource_announcement() {
+        send_direct(
+            &mut writer_half,
+            &ServerMessage::ResourceAnnouncement(announcement),
+        )
+        .await?;
+    }
+
     let _ = tx.send(ServerMessage::ChatBroadcast {
         from: "server".to_string(),
         message: format!("{name} joined"),
@@ -244,6 +253,13 @@ async fn handle_client(
 
                 let _ = tx.send(ServerMessage::ChatBroadcast { from, message });
             }
+            ClientMessage::ResourceAvailabilityReport(report) => {
+                info!(
+                    fully_available = report.is_fully_available,
+                    entries = report.resources.len(),
+                    "client resource availability received"
+                );
+            }
         }
     }
 
@@ -265,4 +281,28 @@ async fn send_direct<W: AsyncWriteExt + Unpin>(writer: &mut W, msg: &ServerMessa
 fn next_entity_id(client_id: &Uuid) -> u32 {
     let bytes = client_id.as_bytes();
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+fn build_example_resource_announcement() -> Option<ResourceAnnouncement> {
+    let resource_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/resources/chat");
+    let index = build_pack_index(resource_dir).ok()?;
+    let files = index
+        .files
+        .into_iter()
+        .map(|file| AnnouncedResourceFile {
+            relative_path: file.relative_path.to_string_lossy().into_owned(),
+            size_bytes: file.size_bytes,
+            sha256: file.sha256,
+        })
+        .collect();
+
+    Some(ResourceAnnouncement {
+        resources: vec![AnnouncedResource {
+            name: index.manifest.name,
+            version: index.manifest.version,
+            files,
+            protocol_version: index.manifest.protocol_version,
+        }],
+    })
 }

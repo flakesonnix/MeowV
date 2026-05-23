@@ -1,7 +1,10 @@
 use std::env;
 
 use anyhow::{Context, Result};
-use protocol::{decode_server_line, encode_line, ClientMessage, PROTOCOL_VERSION};
+use protocol::{
+    decode_server_line, encode_line, AnnouncedResource, ClientMessage, ResourceAvailabilityEntry,
+    ResourceAvailabilityReport, ResourceAvailabilityStatus, ServerMessage, PROTOCOL_VERSION,
+};
 use resource_manifest::{
     build_load_plan_from_root, build_pack_index, discover_resources, load_manifest_from_path,
     resolve_load_order, verify_cache_for_resource, CacheFileStatus, ResourceEntrypointKind,
@@ -20,6 +23,7 @@ struct ClientConfig {
     addr: String,
     name: String,
     message: String,
+    resource_cache: Option<String>,
 }
 
 impl Default for ClientConfig {
@@ -28,6 +32,7 @@ impl Default for ClientConfig {
             addr: "127.0.0.1:7000".to_string(),
             name: "dummy-client".to_string(),
             message: "hello from client".to_string(),
+            resource_cache: None,
         }
     }
 }
@@ -56,6 +61,10 @@ impl ClientConfig {
             cfg.message = message;
         }
 
+        if let Ok(resource_cache) = env::var("MEOWV_RESOURCE_CACHE") {
+            cfg.resource_cache = Some(resource_cache);
+        }
+
         if let Some(addr) = read_flag(args, "--addr") {
             cfg.addr = addr;
         }
@@ -66,6 +75,10 @@ impl ClientConfig {
 
         if let Some(message) = read_flag(args, "--message") {
             cfg.message = message;
+        }
+
+        if let Some(resource_cache) = read_flag(args, "--resource-cache") {
+            cfg.resource_cache = Some(resource_cache);
         }
 
         Ok(cfg)
@@ -139,7 +152,20 @@ async fn main() -> Result<()> {
 
     while let Some(line) = lines.next_line().await? {
         let packet = decode_server_line(&line)?;
-        info!(packet = ?packet, "received packet");
+        match packet {
+            ServerMessage::ResourceAnnouncement(announcement) => {
+                let report =
+                    handle_resource_announcement(&announcement, config.resource_cache.as_deref())?;
+                writer_half
+                    .write_all(
+                        encode_line(&ClientMessage::ResourceAvailabilityReport(report))?.as_bytes(),
+                    )
+                    .await?;
+            }
+            other => {
+                info!(packet = ?other, "received packet");
+            }
+        }
     }
 
     Ok(())
@@ -369,6 +395,73 @@ fn print_resource_runtime_plan(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn handle_resource_announcement(
+    announcement: &protocol::ResourceAnnouncement,
+    resource_cache: Option<&str>,
+) -> Result<ResourceAvailabilityReport> {
+    let mut entries = Vec::new();
+
+    for resource in &announcement.resources {
+        println!("Announced Resource: {} {}", resource.name, resource.version);
+        for file in &resource.files {
+            println!(
+                "- {} | {} bytes | {}",
+                file.relative_path, file.size_bytes, file.sha256
+            );
+        }
+
+        entries.extend(build_availability_entries(resource, resource_cache)?);
+    }
+
+    let is_fully_available = entries
+        .iter()
+        .all(|entry| entry.status == ResourceAvailabilityStatus::Available);
+    let report = ResourceAvailabilityReport {
+        resources: entries,
+        is_fully_available,
+    };
+
+    println!(
+        "Resource Availability: {}",
+        if report.is_fully_available {
+            "all files available"
+        } else {
+            "missing or mismatched files detected"
+        }
+    );
+
+    Ok(report)
+}
+
+fn build_availability_entries(
+    resource: &AnnouncedResource,
+    resource_cache: Option<&str>,
+) -> Result<Vec<ResourceAvailabilityEntry>> {
+    if let Some(cache_dir) = resource_cache {
+        let report =
+            verify_cache_for_resource(format!("examples/resources/{}", resource.name), cache_dir)?;
+        return Ok(report
+            .entries
+            .into_iter()
+            .map(|entry| ResourceAvailabilityEntry {
+                resource_name: resource.name.clone(),
+                file_path: entry.relative_path.to_string_lossy().into_owned(),
+                status: map_cache_status(entry.status),
+            })
+            .collect());
+    }
+
+    Ok(resource
+        .files
+        .iter()
+        .map(|file| ResourceAvailabilityEntry {
+            resource_name: resource.name.clone(),
+            file_path: file.relative_path.clone(),
+            status: ResourceAvailabilityStatus::Missing,
+        })
+        .collect())
+}
+
 fn format_edition(edition: &server_browser::EditionCompatibility) -> &'static str {
     match edition {
         server_browser::EditionCompatibility::Legacy => "legacy",
@@ -413,6 +506,15 @@ fn format_runtime_state(state: &ResourceRuntimeState) -> &'static str {
         ResourceRuntimeState::Started => "started",
         ResourceRuntimeState::Stopped => "stopped",
         ResourceRuntimeState::Failed => "failed",
+    }
+}
+
+fn map_cache_status(status: CacheFileStatus) -> ResourceAvailabilityStatus {
+    match status {
+        CacheFileStatus::Valid => ResourceAvailabilityStatus::Available,
+        CacheFileStatus::Missing => ResourceAvailabilityStatus::Missing,
+        CacheFileStatus::SizeMismatch => ResourceAvailabilityStatus::SizeMismatch,
+        CacheFileStatus::HashMismatch => ResourceAvailabilityStatus::HashMismatch,
     }
 }
 

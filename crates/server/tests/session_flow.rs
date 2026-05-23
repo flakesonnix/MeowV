@@ -58,23 +58,38 @@ async fn login_chat_and_snapshot_flow() -> Result<()> {
         other => panic!("expected welcome, got {other:?}"),
     }
 
-    let joined = read_packet(&mut lines).await?;
-    match joined {
-        ServerMessage::ChatBroadcast { from, message } => {
-            assert_eq!(from, "server");
-            assert_eq!(message, "alice joined");
+    let mut saw_announcement = false;
+    let mut saw_join = false;
+    let mut saw_chat = false;
+    for _ in 0..5 {
+        match read_packet(&mut lines).await? {
+            ServerMessage::ResourceAnnouncement(announcement) => {
+                assert_eq!(announcement.resources.len(), 1);
+                assert_eq!(announcement.resources[0].name, "chat");
+                saw_announcement = true;
+            }
+            ServerMessage::ChatBroadcast { from, message } => {
+                if from == "server" {
+                    assert_eq!(message, "alice joined");
+                    saw_join = true;
+                } else if from == "alice" {
+                    assert_eq!(message, "hello");
+                    saw_chat = true;
+                } else {
+                    panic!("unexpected chat sender: {from}");
+                }
+            }
+            ServerMessage::EntitySnapshot { .. } => {}
+            other => panic!("expected announcement, chat broadcast, or snapshot, got {other:?}"),
         }
-        other => panic!("expected join broadcast, got {other:?}"),
-    }
 
-    let chat = read_packet(&mut lines).await?;
-    match chat {
-        ServerMessage::ChatBroadcast { from, message } => {
-            assert_eq!(from, "alice");
-            assert_eq!(message, "hello");
+        if saw_announcement && saw_join && saw_chat {
+            break;
         }
-        other => panic!("expected chat broadcast, got {other:?}"),
     }
+    assert!(saw_announcement);
+    assert!(saw_join);
+    assert!(saw_chat);
 
     let snapshot = read_packet(&mut lines).await?;
     match snapshot {
