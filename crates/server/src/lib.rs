@@ -2,10 +2,12 @@ use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use protocol::{
-    build_join_gate_decision, decode_client_line, encode_line, evaluate_resource_policy,
-    AnnouncedResource, AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState,
-    JoinGateDecision, JoinGateOutcome, Position, ResourceAnnouncement, ResourceJoinDecision,
-    ResourcePolicyEvaluation, ResourceRequirementLevel, ServerMessage, PROTOCOL_VERSION,
+    build_join_gate_decision, current_protocol_profile, decode_client_line, encode_line,
+    evaluate_resource_policy, negotiate_protocol_dry_run, AnnouncedResource, AnnouncedResourceFile,
+    ClientMessage, DisconnectReason, EntityState, JoinGateDecision, JoinGateOutcome, Position,
+    ProtocolCompatibilityProfile, ProtocolNegotiationStatus, ProtocolVersionRange,
+    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation, ResourceRequirementLevel,
+    ServerMessage, PROTOCOL_VERSION,
 };
 use resource_manifest::build_pack_index;
 use serde::Deserialize;
@@ -175,6 +177,31 @@ async fn handle_client(
                     )
                     .await?;
                     return Ok(());
+                }
+
+                let server_profile = current_protocol_profile();
+                let client_profile = ProtocolCompatibilityProfile {
+                    version_range: ProtocolVersionRange {
+                        min: protocol_version,
+                        max: protocol_version,
+                    },
+                    capabilities: Vec::new(),
+                };
+                let negotiation =
+                    negotiate_protocol_dry_run(&client_profile, &server_profile);
+                info!(
+                    client_version = protocol_version,
+                    server_version = PROTOCOL_VERSION,
+                    negotiation_status = ?negotiation.status,
+                    "protocol handshake: exact-match policy active, negotiation dry-run computed"
+                );
+                if negotiation.status != ProtocolNegotiationStatus::ExactMatch {
+                    info!(
+                        client_version = protocol_version,
+                        server_version = PROTOCOL_VERSION,
+                        reason = %negotiation.reason,
+                        "protocol negotiation dry-run: non-exact overlap detected"
+                    );
                 }
 
                 name

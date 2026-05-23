@@ -3,10 +3,11 @@ use std::env;
 use anyhow::{Context, Result};
 use game_edition::{GameEdition, GamePlatform};
 use protocol::{
-    check_announcement_signature_stub, decode_server_line, encode_line, AnnouncedResource,
-    ClientMessage, JoinGateDecision, JoinGateMode, JoinGateOutcome, ResourceAvailabilityEntry,
-    ResourceAvailabilityReport, ResourceAvailabilityStatus, ServerMessage,
-    SignatureVerificationStatus, PROTOCOL_VERSION,
+    check_announcement_signature_stub, current_protocol_profile, decode_server_line, encode_line,
+    negotiate_protocol_dry_run, AnnouncedResource, ClientMessage, JoinGateDecision, JoinGateMode,
+    JoinGateOutcome, ProtocolCapability, ProtocolCompatibilityProfile, ProtocolVersionRange,
+    ResourceAvailabilityEntry, ResourceAvailabilityReport, ResourceAvailabilityStatus,
+    ServerMessage, SignatureVerificationStatus, PROTOCOL_VERSION,
 };
 use resource_manifest::{
     build_load_plan_from_root, build_pack_index, default_compatibility_context, discover_resources,
@@ -135,6 +136,11 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if read_flag_exists(&args, "--protocol-negotiation") {
+        print_protocol_negotiation_dry_run()?;
+        return Ok(());
+    }
+
     let config = ClientConfig::load(&args)?;
 
     let stream = TcpStream::connect(&config.addr).await?;
@@ -150,6 +156,28 @@ async fn main() -> Result<()> {
             .as_bytes(),
         )
         .await?;
+
+    let server_profile = current_protocol_profile();
+    let client_profile = ProtocolCompatibilityProfile {
+        version_range: ProtocolVersionRange {
+            min: PROTOCOL_VERSION,
+            max: PROTOCOL_VERSION,
+        },
+        capabilities: vec![],
+    };
+    let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
+    println!(
+        "Protocol Negotiation (dry-run): {:?}",
+        negotiation.status
+    );
+    println!("  Selected Version: {:?}", negotiation.selected_version);
+    println!(
+        "  Shared Capabilities: {}",
+        format_capabilities(&negotiation.shared_capabilities)
+    );
+    println!("  Reason: {}", negotiation.reason);
+    println!("  (Active policy: exact version match only)");
+
     writer_half
         .write_all(
             encode_line(&ClientMessage::Chat {
@@ -695,4 +723,42 @@ fn read_pair_flag(args: &[String], name: &str) -> Option<(String, String)> {
     args.windows(3)
         .find(|window| window[0] == name)
         .map(|window| (window[1].clone(), window[2].clone()))
+}
+
+fn read_flag_exists(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| a == name)
+}
+
+fn print_protocol_negotiation_dry_run() -> Result<()> {
+    let server_profile = current_protocol_profile();
+    let client_profile = ProtocolCompatibilityProfile {
+        version_range: ProtocolVersionRange {
+            min: PROTOCOL_VERSION,
+            max: PROTOCOL_VERSION,
+        },
+        capabilities: vec![],
+    };
+    let result = negotiate_protocol_dry_run(&client_profile, &server_profile);
+
+    println!("Protocol Negotiation (dry-run): {:?}", result.status);
+    println!("  Selected Version: {:?}", result.selected_version);
+    println!(
+        "  Shared Capabilities: {}",
+        format_capabilities(&result.shared_capabilities)
+    );
+    println!("  Reason: {}", result.reason);
+    println!("  (Active policy: exact version match only)");
+    Ok(())
+}
+
+fn format_capabilities(capabilities: &[ProtocolCapability]) -> String {
+    if capabilities.is_empty() {
+        "<none>".to_string()
+    } else {
+        capabilities
+            .iter()
+            .map(|c| format!("{:?}", c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
