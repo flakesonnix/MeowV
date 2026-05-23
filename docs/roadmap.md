@@ -46,6 +46,7 @@
 | 3.5 | Real signature verification design — design spec for announcement/resource index signature verification |
 | 3.6 | Signature metadata model — typed algorithm enum, structural validation, canonical payload |
 | 3.7 | Signature verification dry-run planner — deterministic plan/report from metadata + trust policy |
+| 3.8 | Signature verification engine — real Ed25519 crypto, consumes M3.7 plan, report-only |
 
 ---
 
@@ -189,6 +190,24 @@ Signature verification dry-run planner:
 - 16 new protocol unit tests (76 total)
 - No crypto dependencies, no cryptographic verification, no downloads, no enforcement
 - `docs/signature-verification-dry-run.md` — new doc
+
+## Milestone 3.8
+
+Signature verification engine (real Ed25519 crypto):
+
+- `TrustedPublicKey` struct — key_id + algorithm + raw public key bytes
+- `VerificationError` enum — `UnsupportedAlgorithm`, `UnknownKeyId`, `InvalidSignature`, `MalformedKeyMaterial`, `MalformedSignatureBytes`, `SignedPayloadMismatch`, `CanonicalPayloadMissing`
+- `VerificationOutcome` enum — `Valid`, `Invalid { error }`, `Skipped { reason }`
+- `VerificationEntry` — per-resource entry with resource_name + outcome
+- `VerificationReport` — aggregate report, `is_empty()`, `all_valid()`, `to_text()`
+- `verify_ed25519_signature(payload_bytes, signature_b64, public_key_bytes)` — pure Ed25519 verification using `ed25519-dalek`
+- `execute_verification_plan(&ResourceAnnouncement, &SignatureVerificationPlan, &[TrustedPublicKey]) -> VerificationReport` — consumes M3.7 plan, produces real verification results
+- All plan entries receive the same announcement-level outcome (announcement-level signature covers all resources equally)
+- `crates/protocol/src/signature_engine.rs` — new module in protocol crate
+- Dependencies: `ed25519-dalek` v2.2, `base64` v0.22
+- 14 new signature engine unit tests (90 protocol tests total)
+- No enforcement, no disconnects, no downloads, no cache writes
+- `docs/signature-verification-engine.md` — new doc
 
 ---
 
