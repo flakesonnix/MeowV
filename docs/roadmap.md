@@ -30,6 +30,17 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.0
+
+Server session state machine:
+
+- explicit `SessionState` enum (Connected → … → ReadyDryRun / Failed)
+- `SessionStateMachine` with forward-only transitions, terminal Failed state
+- `SessionStateError` variants (InvalidTransition, ProtocolMismatch, PolicyBlockedDryRun, …)
+- server `handle_client` tracks state through full handshake pipeline
+- each transition logged at `info` level; no enforcement changes
+- docs explaining state graph, dry-run nature, and future enforcement point
+
 ## Milestone 1.9
 
 Protocol capability-gated resource flow:
