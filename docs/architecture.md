@@ -1,52 +1,238 @@
 # Architecture
 
-## Goals
+## Project Overview
 
-Milestone 0 proves the project skeleton, development environment, and packet flow without touching GTA V internals.
+MeowV is a clean-room GTA V-like multiplayer framework prototype. It
+implements the networking, resource management, and server runtime
+infrastructure that a multiplayer mod would need, but in a fully standalone
+environment with no game integration. Inspired by the architecture of FiveM /
+alt:V / RAGE MP but independently designed and implemented.
 
-## Current Components
+All code is Rust, organised as a multi-crate Cargo workspace. Every feature is
+dry-run or report-only — nothing enforces policy, downloads files, or executes
+scripts.
+
+## Crate Map
 
 ### `crates/protocol`
 
-Shared packet definitions, protocol version constant, disconnect reasons, and line-delimited JSON encode/decode helpers.
+Shared wire-format types, protocol versioning, and policy evaluation helpers.
+
+| Area | Key Types |
+|---|---|
+| Messages | `ClientMessage`, `ServerMessage` — line-delimited JSON |
+| Versioning | `PROTOCOL_VERSION`, `ProtocolVersionRange` |
+| Capabilities | `ProtocolCapability`, `ProtocolCompatibilityProfile` |
+| Negotiation | `negotiate_protocol_dry_run`, `ProtocolNegotiationResult` |
+| Resource flow | `ResourceAnnouncement`, `AnnouncedResource`, `ResourcePolicyEvaluation`, `ResourceJoinDecision`, `ResourceRequirementLevel` |
+| Join gate | `JoinGateDecision`, `JoinGateOutcome`, `build_join_gate_decision` |
+| Gate helpers | `capability_gate_report`, `shared_capabilities`, `requires_capability`, `profile_supports_capability` |
+| Signature | `check_announcement_signature_stub` (stub, non-enforcing) |
+| Entity sync | `EntityState`, `Position` |
+
+Tests: 39
+
+### `crates/resource_manifest`
+
+Standalone resource packaging model. No I/O beyond reading manifest TOML files
+and building directory indexes.
+
+| Area | Key Types |
+|---|---|
+| Manifest | `ResourceManifest` — TOML model |
+| Pack index | `build_pack_index`, `PackIndex` — SHA-256, symlink rejection |
+| Cache verify | `verify_cache`, `CacheVerificationReport` |
+| Registry | `ResourceRegistry`, `ResourceRegistration` — discovery + dep resolution |
+| Load plan | `build_load_plan` — Kahn/topo sort, deterministic |
+| Runtime SM | `ResourceRuntimeStateMachine`, `ResourceState` (Planned→Validated→Ready→Started→Stopped/Failed) |
+| Compatibility | `CompatibilityContext`, `CompatibilityReport`, `check_compatibility` |
+
+Tests: 56
 
 ### `crates/server`
 
-Async TCP server with:
+Async TCP server with full session lifecycle, admin/debug infrastructure,
+config-driven policy, and graceful shutdown. The largest crate.
 
-- login handshake
-- chat broadcast
-- simulated entity state broadcast
-- fixed-rate tick loop
-- structured logs
-- config loading
+| Module | Purpose |
+|---|---|
+| `lib.rs` | `run`, `run_with_listener`, `handle_client`, `accept_loop`, `admin_stdin_loop`, `spawn_tick_loop` |
+| `session` | `SessionState`, `SessionStateMachine` — forward-only state machine (Connected → … → ReadyDryRun / Failed) |
+| `event_log` | `SessionEventLog`, `SessionEvent` — in-memory per-session audit trail, no timestamps |
+| `diagnostics` | `SessionDiagnostics` — read-only snapshot from state machine + event log |
+| `session_registry` | `SessionRegistry`, `SessionRegistrySnapshot` — BTreeMap-backed live registry with deterministic ordering |
+| `status` | `ServerRuntimeStatus` — config-derived snapshot with live session counts |
+| `config` | `ServerConfig` (6 sections), `ConfigError`, `load_from_path`, `load_with_env`, `validate` |
+| `admin` | `AdminCommand` (6 variants), `parse_admin_command`, `handle_admin_command`, `handle_admin_command_with_context` |
+| `shutdown` | `ShutdownState`, `ShutdownReason`, `ShutdownSummary`, `build_shutdown_summary` |
+
+Tests: 116
 
 ### `crates/client`
 
-Dummy client used for protocol and UX testing. It loads config, connects, logs in with protocol version, sends one chat message, and prints server packets.
+Dummy CLI client used for protocol and integration testing. Connects, logs in
+with protocol version, sends a chat message, and prints server packets.
 
-## Data Flow
+Tests: 0
 
-1. Client connects over TCP.
-2. Client sends `ClientMessage::Login` with protocol version.
-3. Server either responds with `ServerMessage::Welcome` or clean `ServerMessage::Disconnect`.
-4. Client may send `ClientMessage::Chat`.
-5. Server broadcasts chat and periodic fake entity snapshots.
+### `crates/game_edition`
 
-## Safety Boundary
+Edition / platform detection types. Conservative placeholders — no runtime
+detection beyond compile-time `cfg` checks.
 
-No game integration exists here.
+| Type | Purpose |
+|---|---|
+| `GameEdition` | Legacy, Enhanced, Unknown |
+| `GamePlatform` | Windows, Linux, Unknown |
+| `detect_edition` | Path-based heuristic, not GTA V runtime |
 
-TODO: if future native bridge work starts, keep it in separate low-level crate with strict interface boundary, legal review notes, and no proprietary code or copied data layouts.
+Tests: 4
 
-## Rust-First Direction
+### `crates/server_browser`
 
-Rust is sufficient for:
+Local JSON server list source and filtering.
 
-- backend server runtime
-- protocol evolution
-- launcher/tooling
-- asset/resource packaging metadata
-- standalone client simulation
+| Type | Purpose |
+|---|---|
+| `ServerEntry` | name, bind, protocol_version, edition |
+| `LocalJsonServerListSource` | reads `server_list.json` |
+| `filter_servers` | edition + protocol version filtering |
 
-C++ should only appear later if a narrow, unavoidable platform integration boundary exists.
+Tests: 4
+
+## Server Module Relationships
+
+```
+config ──────────────────────────────────────────┐
+                                                 │
+       ┌───────────────── session ──── event_log │
+       │                      │            │     │
+       │                      ▼            ▼     │
+       │              diagnostics ◄── session_reg │
+       │                      │            │     │
+       │                      ▼            ▼     │
+  lib.rs ─── admin ─── status ◄── session_reg ───┤
+       │                      │                  │
+       │                      ▼                  │
+       └──────────── shutdown ◄── session_reg ────┘
+```
+
+- `lib.rs` owns the runtime and wires all modules together.
+- `session` and `event_log` are per-task (local to `handle_client`).
+- `session_registry`, `status`, `admin`, `shutdown` are shared across tasks
+  via `SharedState` (behind `Arc` + `Mutex`/`RwLock`).
+- `config` is read at startup and cloned per task; never mutated at runtime.
+
+## Resource Pipeline (Client-Side, Dry-Run)
+
+```
+resource.toml (manifest)
+     ↓
+pack index (SHA-256, no symlinks)
+     ↓
+cache verification (SHA-256 compare)
+     ↓
+resource registry (discovery + dep resolution)
+     ↓
+load plan (Kahn/topo sort, deterministic)
+     ↓
+runtime state machine (no-exec: Planned→Validated→Ready→Started→Stopped)
+     ↓
+compatibility check (edition, protocol version)
+```
+
+## Server Handshake Pipeline
+
+```
+TCP connect
+     ↓
+[SessionStateMachine: Connected]
+     ↓  Login { name, protocol_version }
+[HelloReceived]
+     ↓  protocol version check (exact match enforced)
+[VersionChecked] — or — [Failed] + disconnect
+     ↓
+protocol negotiation dry-run (report-only)
+[NegotiationDryRunLogged]
+     ↓
+capability gate for ResourceAnnouncement (report-only)
+[CapabilityGateChecked]
+     ↓
+send ResourceAnnouncement
+[ResourceAnnouncementSent]
+     ↓
+receive AvailabilityReport
+[AvailabilityReportReceived]
+     ↓
+evaluate resource policy (report-only)
+[ResourcePolicyEvaluated]
+     ↓
+capability gate for JoinGateDryRun (report-only)
+[CapabilityGateChecked]
+     ↓
+send JoinGateDecision (dry-run, no disconnect)
+[JoinGateDryRunSent]
+     ↓
+[ReadyDryRun] — diagnostics printed, session logged
+```
+
+Each transition records a `SessionEvent` in the per-task `SessionEventLog` and
+updates the live `SessionRegistry`.
+
+## Admin / Debug Pipeline
+
+```
+stdin line
+     ↓
+parse_admin_command (case-insensitive, 6 commands)
+     ↓
+snapshot registry + build status
+     ↓
+handle_admin_command_with_context
+     ↓
+log result at info level
+     ↓
+quit → ShutdownState::request(AdminQuit) → oneshot signal
+     ↓
+accept loop stops → build ShutdownSummary → log → return
+```
+
+## Current Dry-Run Policies
+
+| Policy | Mode |
+|---|---|
+| Protocol version matching | **Enforced** — exact match required |
+| Protocol negotiation | Dry-run only — no enforcement, logged |
+| Join gate | Dry-run only — no disconnect |
+| Capability gates | Report-only — logged, no behaviour change |
+| Resource announcement signature | Stub — not checked |
+| Resource compatibility | Report-only — logged, no enforcement |
+| Session state machine | Forward-only, tracks pipeline, no enforcement |
+| Admin/debug | Local stdin only, no network |
+| Diagnostics registry output | No IP/personal data, deterministic |
+| Shutdown summary | In-memory only, no persistence |
+
+## Next Recommended Milestones
+
+- **3.1**: Server lifecycle config cleanup — consolidate startup/shutdown CLI
+  flags, validate config sections more strictly.
+- **3.2**: Resource download design spec — document the future download
+  protocol as a design document only. No implementation.
+- **3.3**: Local resource cache repair plan — design a cache-repair flow that
+  uses only local data. No network.
+- **3.4**: Real signature verification — implement or design announcement
+  signature verification for resource authenticity.
+- **3.5**: Minimal sandbox runtime design — document a no-exec runtime
+  architecture for future script sandboxing. No implementation.
+
+## Hard Boundaries
+
+- No GTA V integration. No game runtime dependencies.
+- No memory hooks, injection, or anti-cheat bypass.
+- No DRM or Rockstar service bypass.
+- No downloads, file serving, or script execution.
+- No remote admin API, web panel, or network-accessible debug interface.
+- No persistence, telemetry, or metrics export.
+- No proprietary, leaked, or copied code.
+- No Lua, JS, WASM, or any scripting runtime.
+- All protocol designs are original, clean-room, and independently documented.

@@ -1,5 +1,52 @@
 # Roadmap
 
+## Milestone Summary
+
+### 0.x — Foundations
+
+| MS | Title |
+|---|---|
+| 0 | Standalone prototype — Rust workspace, Nix, protocol, server, dummy client, login/chat/entity sync |
+| 0.5 | Game edition layer — edition-aware types, platform detection, clean-room docs |
+
+### 1.x — Resource / Protocol Dry-Run Pipeline
+
+| MS | Title |
+|---|---|
+| 1.0 | Resource registry — discovery, dep resolution, cycle detection, load order |
+| 1.1 | Runtime boundary — no-exec planning, deterministic resource ordering |
+| 1.2 | Runtime state machine — no-exec lifecycle, dependency readiness |
+| 1.8 | Protocol negotiation dry-run — version ranges, capabilities, intersection logic |
+| 1.9 | Capability-gated resource flow — gate helpers, server/client dry-run reporting |
+
+### 2.x — Server Runtime / Admin / Debug Infrastructure
+
+| MS | Title |
+|---|---|
+| 2.0 | Session state machine — Connected→ReadyDryRun/Failed, forward-only |
+| 2.1 | Session event log — in-memory per-session audit trail |
+| 2.2 | Session diagnostics — read-only snapshot from SM + event log |
+| 2.3 | Server config — 5-section TOML config, validation, dry-run policies |
+| 2.4 | Structured logging — LogLevel/LogFormat, text/JSON, config-driven |
+| 2.5 | Local admin commands — stdin parser, 6 commands, oneshot quit |
+| 2.6 | Runtime status snapshot — ServerRuntimeStatus, admin status/sessions live |
+| 2.7 | Live session registry — BTreeMap-backed, SessionGuard RAII |
+| 2.8 | Admin diagnostics — registry-backed diagnostics command |
+| 2.9 | Graceful shutdown — ShutdownState, ShutdownSummary, final log dump |
+
+### 3.x — Next Phase Candidates
+
+| MS | Title |
+|---|---|
+| 3.0 | Architecture refresh — crate/module map, pipeline docs, security boundaries |
+| 3.1 | Server lifecycle config cleanup — startup/shutdown CLI, stricter validation |
+| 3.2 | Resource download design spec — protocol design doc only, no implementation |
+| 3.3 | Local resource cache repair — design-only, no network |
+| 3.4 | Real signature verification — announcement signature checking |
+| 3.5 | Minimal sandbox runtime design — no-exec design doc, no implementation |
+
+---
+
 ## Milestone 0
 
 Standalone prototype:
@@ -231,7 +278,7 @@ Resource/runtime model:
 - permission model
 - hot-reload experiments in standalone environment
 
-## Milestone 3
+## Milestone 3 (Longer-Term)
 
 Transport/runtime refinement:
 
