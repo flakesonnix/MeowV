@@ -369,25 +369,31 @@ async fn main() -> Result<()> {
 
         let hb_writer = writer.clone();
         let hb_lines = lines_arc.clone();
-        tokio::spawn(async move {
-            client::heartbeat_loop(hb_writer, hb_lines, Duration::from_millis(interval_ms), Duration::from_millis(timeout_ms), stop_rx).await;
+
+        // Spawn the heartbeat loop and keep the JoinHandle so we can await it on
+        // shutdown. The loop itself listens on `stop_rx` for a shutdown request.
+        let hb_handle = tokio::spawn(async move {
+            client::heartbeat_loop(
+                hb_writer,
+                hb_lines,
+                Duration::from_millis(interval_ms),
+                Duration::from_millis(timeout_ms),
+                stop_rx,
+            )
+            .await;
         });
 
-        // For now, run indefinitely until stdin EOF or program exit; we simply wait here.
-        // In future we'll wire to signal handling. To keep it simple, block until stdin closes.
-        use tokio::io::AsyncReadExt;
-        let mut stdin = tokio::io::stdin();
-        let mut buf = [0u8; 1];
-        // read until EOF
-        loop {
-            match stdin.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(_) => continue,
-            }
-        }
+        println!("heartbeat enabled; press Ctrl-C to stop");
 
-        // request heartbeat stop
+        // Wait for Ctrl-C from the OS/user.
+        tokio::signal::ctrl_c()
+            .await
+            .context("failed to listen for ctrl-c")?;
+        println!("shutdown requested (Ctrl-C)");
+
+        // request heartbeat stop and wait for the task to finish
         let _ = stop_tx.send(());
+        let _ = hb_handle.await;
     }
     Ok(())
 }
