@@ -1,0 +1,11 @@
+[package]
+name = "server_browser"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+protocol = { path = "../protocol" }
+serde.workspace = true
+serde_json.workspace = true

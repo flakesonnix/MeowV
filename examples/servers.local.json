@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Local Dev Server",
+    "address": "127.0.0.1",
+    "port": 7000,
+    "current_players": 1,
+    "max_players": 32,
+    "protocol_version": 1,
+    "tags": ["local", "dev"],
+    "edition_compatibility": "any"
+  },
+  {
+    "name": "Enhanced Research Sandbox",
+    "address": "127.0.0.1",
+    "port": 7001,
+    "current_players": 0,
+    "max_players": 16,
+    "protocol_version": 1,
+    "tags": ["research", "enhanced"],
+    "edition_compatibility": "enhanced"
+  }
+]

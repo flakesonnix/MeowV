@@ -48,6 +48,7 @@ dependencies = [
  "anyhow",
  "protocol",
  "serde",
+ "server_browser",
  "tokio",
  "toml",
  "tracing",
@@ -429,6 +430,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "server_browser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "protocol",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
