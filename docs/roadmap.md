@@ -54,6 +54,8 @@
 | 4.3 | Policy config sections + UX — `[signature]` section, `[enforcement]` validated, status/admin output, lifecycle summary, example config, docs |
 | 4.4 | Heartbeat / Ping-Pong Protocol — add Ping/Pong DTOs; server echoes Pong(sequence); tests |
 | 4.7 | Configurable periodic heartbeat loop — client-side periodic Ping; report-only, no enforcement |
+| 4.9 | Heartbeat status / metrics — `HeartbeatMetrics` return from client loop; client prints summary on shutdown; server tracks `ping_received_count`/`pong_sent_count` via `SessionDiagnostics` |
+| 4.10 | Heartbeat admin observability — surface heartbeat counts in `sessions`/`diagnostics` admin output via registry snapshot; tests; docs |
 
 ---
 
@@ -248,6 +250,24 @@ Wire signature verification into resource flow (report-only):
 - 300 workspace tests passing
 - No enforcement, no disconnects, no downloads, no cache writes
 - `docs/signature-verification-reporting.md` — new doc
+
+## Milestone 4.10
+
+Heartbeat admin observability:
+
+- `SessionRegistryEntry` gains `ping_received_count` and `pong_sent_count` fields (derived from event log when registry is updated)
+- `SessionRegistry::update_session_heartbeat_counts()` — push counts to registry entry after each Pong is sent
+- `SessionRegistrySnapshot::to_diagnostics_text()` — per-session line now includes `ping_rx=N  pong_tx=N`
+- `handle_client` in `lib.rs` updates registry heartbeat counts after each Pong send
+- Admin `sessions` and `diagnostics` commands show heartbeat counts without additional commands or flags
+- Zero counts shown explicitly when no heartbeat activity has occurred
+- 5 new `session_registry` unit tests + 3 new `admin` unit tests
+- No new commands, no enforcement, no protocol change, no duplicate counter state
+- `docs/server-admin-debug-commands.md` updated — sessions output example and command description
+- `docs/client-heartbeat.md` updated — server-side observability section
+- `docs/roadmap.md` updated with M4.9 and M4.10 entries
+
+---
 
 ## Milestone 4.0
 

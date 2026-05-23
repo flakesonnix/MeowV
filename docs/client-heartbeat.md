@@ -20,4 +20,5 @@ Observability:
 
 - Client tracks: `heartbeat_sent_count`, `heartbeat_pong_count`, `heartbeat_timeout_or_error_count`, `last_ping_sequence`, `last_pong_sequence`.
 - Server session diagnostics track heartbeat event counts derived from event log: `ping_received_count`, `pong_sent_count`.
+- Server admin `sessions` and `diagnostics` commands show `ping_rx=N` and `pong_tx=N` per session in the live registry snapshot. Zero counts appear explicitly when no heartbeat activity has occurred.
 - No heartbeat enforcement or disconnect behavior is added by these metrics.
