@@ -7,6 +7,10 @@ pub enum SessionEventKind {
     VersionChecked,
     ProtocolNegotiationDryRun,
     CapabilityGateChecked,
+    /// Heartbeat ping was received from the client
+    PingReceived,
+    /// Heartbeat pong was sent to the client
+    PongSent,
     ResourceAnnouncementSent,
     AvailabilityReportReceived,
     ResourcePolicyEvaluated,

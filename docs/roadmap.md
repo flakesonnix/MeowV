@@ -51,6 +51,8 @@
 | 4.0 | Strict signature enforcement gate — `SignaturePolicy`, evaluate + reject under strict, report-only by default |
 | 4.1 | Trust key UX + policy validation — `KeyConfigError`, validate config, strict requires keys, key summary |
 | 4.2 | Wire session enforcement into `handle_client` — Strict policy disconnects, ReportOnly preserved, integration tests |
+| 4.3 | Policy config sections + UX — `[signature]` section, `[enforcement]` validated, status/admin output, lifecycle summary, example config, docs |
+| 4.4 | Heartbeat / Ping-Pong Protocol — add Ping/Pong DTOs; server echoes Pong(sequence); tests |
 
 ---
 
@@ -277,6 +279,22 @@ Trust key UX + policy validation:
 - 313 workspace tests passing
 - No downloads, no cache writes, no execution, no silent downgrade
 - `docs/strict-signature-policy.md` updated
+
+## Milestone 4.3
+
+Policy config sections + UX:
+
+- `SignatureSection` added to server config with `policy: SignaturePolicy` field (default `ReportOnly`)
+- `SignaturePolicy` in protocol crate gains `Serialize, Deserialize` derives with `#[serde(rename_all = "snake_case")]`
+- Lifecycle summary now includes `signature_policy: report_only` / `strict`
+- `ServerRuntimeStatus` gains `session_enforcement` and `signature_policy` string fields, visible in admin `status` output
+- `example.server.toml` updated with `[enforcement]` and `[signature]` sections with inline comments
+- 3 new config unit tests: lifecycle summary includes both policies, strict enforcement in lifecycle, strict signature in lifecycle
+- 354 total workspace tests passing (was 351)
+- No enforcement behavior changes — purely config organization and visibility
+- `docs/server-policy-configuration.md` — new doc covering both sections
+
+---
 
 ## Milestone 4.2
 

@@ -285,6 +285,8 @@ pub struct SignatureVerificationReport {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Login { name: String, protocol_version: u32 },
+    /// Heartbeat ping from client to server. Server should reply with Pong(sequence).
+    Ping { sequence: u64 },
     Chat { message: String },
     ResourceAvailabilityReport(ResourceAvailabilityReport),
 }
@@ -305,6 +307,8 @@ pub enum ServerMessage {
         motd: String,
         protocol_version: u32,
     },
+    /// Heartbeat pong from server to client, echoing the sequence from Ping.
+    Pong { sequence: u64 },
     ChatBroadcast {
         from: String,
         message: String,

@@ -11,7 +11,7 @@ mod status;
 pub use config::{
     AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, EnforcementSection,
     JoinGateConfigMode, JoinGateSection, LogFormat, LogLevel, LoggingSection, ProtocolSection,
-    ResourcesSection, ServerConfig, ServerSection,
+    ResourcesSection, ServerConfig, ServerSection, SignatureSection,
 };
 pub use enforcement::{SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement};
 pub use session_registry::{
@@ -600,6 +600,22 @@ async fn handle_client(
 
     while let Some(line) = lines.next_line().await? {
         match decode_client_line(&line)? {
+            ClientMessage::Ping { sequence } => {
+                // Heartbeat ping: reply with Pong echoing the sequence.
+                // Record minimal event for observability but do not change session state.
+                event_log.record(
+                    SessionEventKind::PingReceived,
+                    session.state().clone(),
+                    format!("heartbeat: received ping {}", sequence),
+                );
+                // Use broadcast channel so the message is delivered via the writer task.
+                let _ = tx.send(ServerMessage::Pong { sequence });
+                event_log.record(
+                    SessionEventKind::PongSent,
+                    session.state().clone(),
+                    format!("heartbeat: sent pong {}", sequence),
+                );
+            }
             ClientMessage::Login { .. } => {
                 warn!(%client_id, "ignoring duplicate login packet");
             }
