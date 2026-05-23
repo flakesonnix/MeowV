@@ -5,7 +5,7 @@ use protocol::{decode_server_line, encode_line, ClientMessage, PROTOCOL_VERSION}
 use resource_manifest::{
     build_load_plan_from_root, build_pack_index, discover_resources, load_manifest_from_path,
     resolve_load_order, verify_cache_for_resource, CacheFileStatus, ResourceEntrypointKind,
-    ResourceManifest, ResourceRuntimePhase,
+    ResourceManifest, ResourceRuntimePhase, ResourceRuntimeState, ResourceRuntimeStateMachine,
 };
 use serde::Deserialize;
 use server_browser::{filter_current_protocol, LocalJsonServerListSource, ServerListSource};
@@ -105,6 +105,11 @@ async fn main() -> Result<()> {
 
     if let Some(path) = read_flag(&args, "--resource-load-plan") {
         print_resource_load_plan(&path)?;
+        return Ok(());
+    }
+
+    if let Some(path) = read_flag(&args, "--resource-runtime-plan") {
+        print_resource_runtime_plan(&path)?;
         return Ok(());
     }
 
@@ -330,6 +335,40 @@ fn print_resource_load_plan(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn print_resource_runtime_plan(path: &str) -> Result<()> {
+    let plan = build_load_plan_from_root(path)?;
+    let mut machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+    for resource in &plan.resources {
+        machine.validate_resource(&resource.name)?;
+        machine.mark_ready(&resource.name)?;
+        machine.start_resource_no_exec(&resource.name)?;
+    }
+
+    for resource in &plan.resources {
+        let status = machine
+            .status(&resource.name)
+            .expect("resource status must exist");
+        println!("- {}", resource.name);
+        println!(
+            "  Dependencies: {}",
+            if resource.dependencies.is_empty() {
+                "<none>".to_string()
+            } else {
+                resource.dependencies.join(", ")
+            }
+        );
+        println!("  Final State: {}", format_runtime_state(&status.state));
+        println!(
+            "  Message: {}",
+            status.message.as_deref().unwrap_or("<none>")
+        );
+    }
+
+    println!("No scripts were executed.");
+    Ok(())
+}
+
 fn format_edition(edition: &server_browser::EditionCompatibility) -> &'static str {
     match edition {
         server_browser::EditionCompatibility::Legacy => "legacy",
@@ -363,6 +402,17 @@ fn format_runtime_phase(phase: &ResourceRuntimePhase) -> &'static str {
         ResourceRuntimePhase::Validated => "validated",
         ResourceRuntimePhase::Ready => "ready",
         ResourceRuntimePhase::Skipped => "skipped",
+    }
+}
+
+fn format_runtime_state(state: &ResourceRuntimeState) -> &'static str {
+    match state {
+        ResourceRuntimeState::Planned => "planned",
+        ResourceRuntimeState::Validated => "validated",
+        ResourceRuntimeState::Ready => "ready",
+        ResourceRuntimeState::Started => "started",
+        ResourceRuntimeState::Stopped => "stopped",
+        ResourceRuntimeState::Failed => "failed",
     }
 }
 
