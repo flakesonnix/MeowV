@@ -2,8 +2,9 @@ use std::env;
 
 use anyhow::{Context, Result};
 use protocol::{
-    decode_server_line, encode_line, AnnouncedResource, ClientMessage, ResourceAvailabilityEntry,
-    ResourceAvailabilityReport, ResourceAvailabilityStatus, ServerMessage, PROTOCOL_VERSION,
+    decode_server_line, encode_line, AnnouncedResource, ClientMessage, JoinGateDecision,
+    JoinGateMode, JoinGateOutcome, ResourceAvailabilityEntry, ResourceAvailabilityReport,
+    ResourceAvailabilityStatus, ServerMessage, PROTOCOL_VERSION,
 };
 use resource_manifest::{
     build_load_plan_from_root, build_pack_index, discover_resources, load_manifest_from_path,
@@ -161,6 +162,10 @@ async fn main() -> Result<()> {
                         encode_line(&ClientMessage::ResourceAvailabilityReport(report))?.as_bytes(),
                     )
                     .await?;
+                println!("Resource availability report sent.");
+            }
+            ServerMessage::JoinGateDecision(decision) => {
+                print_join_gate_decision(&decision);
             }
             other => {
                 info!(packet = ?other, "received packet");
@@ -515,6 +520,63 @@ fn map_cache_status(status: CacheFileStatus) -> ResourceAvailabilityStatus {
         CacheFileStatus::Missing => ResourceAvailabilityStatus::Missing,
         CacheFileStatus::SizeMismatch => ResourceAvailabilityStatus::SizeMismatch,
         CacheFileStatus::HashMismatch => ResourceAvailabilityStatus::HashMismatch,
+    }
+}
+
+fn print_join_gate_decision(decision: &JoinGateDecision) {
+    println!("Join Gate Mode: {}", format_join_gate_mode(&decision.mode));
+    println!(
+        "Join Gate Outcome: {}",
+        format_join_gate_outcome(&decision.outcome)
+    );
+    println!("Reason: {}", decision.reason);
+    println!(
+        "Missing Required: {}",
+        summarize_list(&decision.policy_evaluation.missing_required)
+    );
+    println!(
+        "Invalid Required: {}",
+        summarize_list(&decision.policy_evaluation.invalid_required)
+    );
+    println!(
+        "Missing Optional: {}",
+        summarize_list(&decision.policy_evaluation.missing_optional)
+    );
+    println!(
+        "Invalid Optional: {}",
+        summarize_list(&decision.policy_evaluation.invalid_optional)
+    );
+    println!(
+        "Missing Recommended: {}",
+        summarize_list(&decision.policy_evaluation.missing_recommended)
+    );
+    println!(
+        "Invalid Recommended: {}",
+        summarize_list(&decision.policy_evaluation.invalid_recommended)
+    );
+    println!("Dry-run only: no disconnects or enforcement were applied.");
+}
+
+fn format_join_gate_mode(mode: &JoinGateMode) -> &'static str {
+    match mode {
+        JoinGateMode::DryRun => "dry_run",
+        JoinGateMode::Enforced => "enforced",
+    }
+}
+
+fn format_join_gate_outcome(outcome: &JoinGateOutcome) -> &'static str {
+    match outcome {
+        JoinGateOutcome::WouldAllow => "would_allow",
+        JoinGateOutcome::WouldWarn => "would_warn",
+        JoinGateOutcome::WouldBlock => "would_block",
+    }
+}
+
+fn summarize_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "<none>".to_string()
+    } else {
+        values.join(", ")
     }
 }
 

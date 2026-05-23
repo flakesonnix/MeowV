@@ -2,17 +2,17 @@ use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use protocol::{
-    decode_client_line, encode_line, evaluate_resource_policy, AnnouncedResource,
-    AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState, Position,
-    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation, ResourceRequirementLevel,
-    ServerMessage, PROTOCOL_VERSION,
+    build_join_gate_decision, decode_client_line, encode_line, evaluate_resource_policy,
+    AnnouncedResource, AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState,
+    JoinGateDecision, JoinGateOutcome, Position, ResourceAnnouncement, ResourceJoinDecision,
+    ResourcePolicyEvaluation, ResourceRequirementLevel, ServerMessage, PROTOCOL_VERSION,
 };
 use resource_manifest::build_pack_index;
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    sync::{broadcast, RwLock},
+    sync::{broadcast, mpsc, RwLock},
     task::JoinHandle,
     time,
 };
@@ -156,6 +156,7 @@ async fn handle_client(
     let (reader_half, mut writer_half) = stream.into_split();
     let mut lines = BufReader::new(reader_half).lines();
     let mut rx = tx.subscribe();
+    let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let name = match lines.next_line().await? {
         Some(line) => match decode_client_line(&line)? {
             ClientMessage::Login {
@@ -233,15 +234,31 @@ async fn handle_client(
 
     let writer_task = tokio::spawn(async move {
         loop {
-            match rx.recv().await {
-                Ok(message) => {
-                    if let Err(err) = send_direct(&mut writer_half, &message).await {
-                        return Err(err);
+            tokio::select! {
+                biased;
+
+                maybe_message = client_rx.recv() => {
+                    match maybe_message {
+                        Some(message) => {
+                            if let Err(err) = send_direct(&mut writer_half, &message).await {
+                                return Err(err);
+                            }
+                        }
+                        None => return Ok(()),
                     }
                 }
-                Err(err) => {
-                    error!(error = %err, "broadcast receive failed");
-                    return Ok(());
+                result = rx.recv() => {
+                    match result {
+                        Ok(message) => {
+                            if let Err(err) = send_direct(&mut writer_half, &message).await {
+                                return Err(err);
+                            }
+                        }
+                        Err(err) => {
+                            error!(error = %err, "broadcast receive failed");
+                            return Ok(());
+                        }
+                    }
                 }
             }
         }
@@ -274,6 +291,9 @@ async fn handle_client(
                 if let Some(announcement) = announcement {
                     let evaluation = evaluate_resource_policy(&announcement, &report);
                     log_resource_policy_evaluation(client_id, &evaluation);
+                    let decision = build_join_gate_decision(evaluation);
+                    log_join_gate_decision(client_id, &decision);
+                    let _ = client_tx.send(ServerMessage::JoinGateDecision(decision));
                 } else {
                     warn!(%client_id, "resource availability report received before announcement was stored");
                 }
@@ -344,4 +364,14 @@ fn log_resource_policy_evaluation(client_id: Uuid, evaluation: &ResourcePolicyEv
         invalid_recommended = evaluation.invalid_recommended.len(),
         "resource policy evaluated"
     );
+}
+
+fn log_join_gate_decision(client_id: Uuid, decision: &JoinGateDecision) {
+    let outcome = match decision.outcome {
+        JoinGateOutcome::WouldAllow => "would_allow",
+        JoinGateOutcome::WouldWarn => "would_warn",
+        JoinGateOutcome::WouldBlock => "would_block",
+    };
+
+    info!(%client_id, outcome, reason = %decision.reason, "join gate dry-run evaluated");
 }
