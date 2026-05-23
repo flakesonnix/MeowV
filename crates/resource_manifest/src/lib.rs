@@ -57,6 +57,34 @@ pub struct ResourcePackIndex {
     pub total_size_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheFileStatus {
+    Valid,
+    Missing,
+    SizeMismatch,
+    HashMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheVerificationEntry {
+    pub relative_path: PathBuf,
+    pub expected_size_bytes: u64,
+    pub actual_size_bytes: Option<u64>,
+    pub expected_sha256: String,
+    pub actual_sha256: Option<String>,
+    pub status: CacheFileStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheVerificationReport {
+    pub entries: Vec<CacheVerificationEntry>,
+    pub valid_count: usize,
+    pub missing_count: usize,
+    pub size_mismatch_count: usize,
+    pub hash_mismatch_count: usize,
+    pub is_fully_valid: bool,
+}
+
 pub fn load_manifest_from_path(path: impl AsRef<Path>) -> Result<ResourceManifest> {
     let path = path.as_ref();
     let raw = fs::read_to_string(path)
@@ -113,6 +141,117 @@ pub fn hash_file_sha256(path: impl AsRef<Path>) -> Result<String> {
     }
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn verify_cache_against_index(
+    index: &ResourcePackIndex,
+    cache_dir: impl AsRef<Path>,
+) -> Result<CacheVerificationReport> {
+    let cache_dir = cache_dir.as_ref();
+    let mut entries = Vec::with_capacity(index.files.len());
+    let mut valid_count = 0;
+    let mut missing_count = 0;
+    let mut size_mismatch_count = 0;
+    let mut hash_mismatch_count = 0;
+
+    for file in &index.files {
+        validate_resource_file_path(&file.relative_path)?;
+
+        let cache_path = cache_dir.join(&file.relative_path);
+        let status_entry = match fs::symlink_metadata(&cache_path) {
+            Ok(metadata) => {
+                anyhow::ensure!(
+                    !metadata.file_type().is_symlink(),
+                    "symlinks are not supported in cache verification"
+                );
+
+                if !metadata.is_file() {
+                    missing_count += 1;
+                    CacheVerificationEntry {
+                        relative_path: file.relative_path.clone(),
+                        expected_size_bytes: file.size_bytes,
+                        actual_size_bytes: None,
+                        expected_sha256: file.sha256.clone(),
+                        actual_sha256: None,
+                        status: CacheFileStatus::Missing,
+                    }
+                } else {
+                    let actual_size = metadata.len();
+                    if actual_size != file.size_bytes {
+                        size_mismatch_count += 1;
+                        CacheVerificationEntry {
+                            relative_path: file.relative_path.clone(),
+                            expected_size_bytes: file.size_bytes,
+                            actual_size_bytes: Some(actual_size),
+                            expected_sha256: file.sha256.clone(),
+                            actual_sha256: None,
+                            status: CacheFileStatus::SizeMismatch,
+                        }
+                    } else {
+                        let actual_sha256 = hash_file_sha256(&cache_path)?;
+                        if actual_sha256 != file.sha256 {
+                            hash_mismatch_count += 1;
+                            CacheVerificationEntry {
+                                relative_path: file.relative_path.clone(),
+                                expected_size_bytes: file.size_bytes,
+                                actual_size_bytes: Some(actual_size),
+                                expected_sha256: file.sha256.clone(),
+                                actual_sha256: Some(actual_sha256),
+                                status: CacheFileStatus::HashMismatch,
+                            }
+                        } else {
+                            valid_count += 1;
+                            CacheVerificationEntry {
+                                relative_path: file.relative_path.clone(),
+                                expected_size_bytes: file.size_bytes,
+                                actual_size_bytes: Some(actual_size),
+                                expected_sha256: file.sha256.clone(),
+                                actual_sha256: Some(actual_sha256),
+                                status: CacheFileStatus::Valid,
+                            }
+                        }
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                missing_count += 1;
+                CacheVerificationEntry {
+                    relative_path: file.relative_path.clone(),
+                    expected_size_bytes: file.size_bytes,
+                    actual_size_bytes: None,
+                    expected_sha256: file.sha256.clone(),
+                    actual_sha256: None,
+                    status: CacheFileStatus::Missing,
+                }
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("failed to stat cache file: {}", cache_path.display())
+                });
+            }
+        };
+
+        entries.push(status_entry);
+    }
+
+    entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+
+    Ok(CacheVerificationReport {
+        entries,
+        valid_count,
+        missing_count,
+        size_mismatch_count,
+        hash_mismatch_count,
+        is_fully_valid: missing_count == 0 && size_mismatch_count == 0 && hash_mismatch_count == 0,
+    })
+}
+
+pub fn verify_cache_for_resource(
+    resource_dir: impl AsRef<Path>,
+    cache_dir: impl AsRef<Path>,
+) -> Result<CacheVerificationReport> {
+    let index = build_pack_index(resource_dir)?;
+    verify_cache_against_index(&index, cache_dir)
 }
 
 pub fn validate_resource_file_path(path: &Path) -> Result<()> {
@@ -430,6 +569,139 @@ mod tests {
         validate_resource_file_path(Path::new("server/main.lua")).unwrap();
     }
 
+    #[test]
+    fn fully_valid_cache() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("server/main.lua"), "print('server')"),
+                (&PathBuf::from("client/main.lua"), "print('client')"),
+            ],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "cache-valid");
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        assert!(report.is_fully_valid);
+        assert_eq!(report.valid_count, report.entries.len());
+        assert_eq!(report.missing_count, 0);
+        assert_eq!(report.size_mismatch_count, 0);
+        assert_eq!(report.hash_mismatch_count, 0);
+    }
+
+    #[test]
+    fn missing_file_is_reported() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("server/main.lua"), "print('server')"),
+                (&PathBuf::from("client/main.lua"), "print('client')"),
+            ],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "cache-missing");
+        fs::remove_file(cache_dir.join("client/main.lua")).unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        assert_eq!(report.missing_count, 1);
+        assert!(!report.is_fully_valid);
+    }
+
+    #[test]
+    fn size_mismatch_is_reported() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "print('server')")],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "cache-size-mismatch");
+        fs::write(cache_dir.join("server/main.lua"), "xx").unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        assert_eq!(report.size_mismatch_count, 1);
+        assert!(!report.is_fully_valid);
+    }
+
+    #[test]
+    fn hash_mismatch_is_reported() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "abc")],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "cache-hash-mismatch");
+        fs::write(cache_dir.join("server/main.lua"), "xyz").unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        assert_eq!(report.hash_mismatch_count, 1);
+        assert!(!report.is_fully_valid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_cache_entry_if_platform_supports_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "print('server')")],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "cache-symlink");
+        let target = cache_dir.join("server/main.lua");
+        let link = cache_dir.join("resource.toml");
+        fs::remove_file(&link).unwrap();
+        symlink(&target, &link).unwrap();
+
+        let err = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("symlinks are not supported in cache verification"));
+    }
+
+    #[test]
+    fn deterministic_report_ordering() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("zeta.lua"), "z"),
+                (&PathBuf::from("alpha.lua"), "a"),
+            ],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "cache-ordering");
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let paths: Vec<_> = report
+            .entries
+            .iter()
+            .map(|entry| entry.relative_path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("alpha.lua"),
+                PathBuf::from("resource.toml"),
+                PathBuf::from("zeta.lua")
+            ]
+        );
+    }
+
+    #[test]
+    fn counts_are_correct() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("server/main.lua"), "abc"),
+                (&PathBuf::from("client/main.lua"), "print('client')"),
+            ],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "cache-counts");
+        fs::remove_file(cache_dir.join("client/main.lua")).unwrap();
+        fs::write(cache_dir.join("server/main.lua"), "zz").unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        assert_eq!(report.valid_count, 1);
+        assert_eq!(report.missing_count, 1);
+        assert_eq!(report.size_mismatch_count, 1);
+        assert_eq!(report.hash_mismatch_count, 0);
+        assert!(!report.is_fully_valid);
+    }
+
     fn valid_manifest() -> &'static str {
         r#"name = "chat"
 version = "0.1.0"
@@ -463,6 +735,29 @@ name = "core_ui"
         }
 
         dir
+    }
+
+    fn clone_dir_contents(source_dir: &Path, label: &str) -> PathBuf {
+        let dest_dir = unique_temp_dir(label);
+        copy_dir_recursive(source_dir, &dest_dir);
+        dest_dir
+    }
+
+    fn copy_dir_recursive(source_dir: &Path, dest_dir: &Path) {
+        fs::create_dir_all(dest_dir).unwrap();
+
+        for entry in fs::read_dir(source_dir).unwrap() {
+            let entry = entry.unwrap();
+            let source_path = entry.path();
+            let dest_path = dest_dir.join(entry.file_name());
+            let metadata = fs::symlink_metadata(&source_path).unwrap();
+
+            if metadata.is_dir() {
+                copy_dir_recursive(&source_path, &dest_path);
+            } else if metadata.is_file() {
+                fs::copy(&source_path, &dest_path).unwrap();
+            }
+        }
     }
 
     fn write_temp_file(name: &str, contents: &str) -> PathBuf {
