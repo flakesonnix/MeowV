@@ -483,6 +483,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "protocol",
+ "resource_manifest",
  "serde",
  "serde_json",
  "tokio",
