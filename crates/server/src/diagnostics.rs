@@ -1,7 +1,8 @@
 use crate::enforcement::{
     SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement,
 };
-use crate::event_log::{SessionEvent, SessionEventLog};
+use crate::event_log::{SessionEvent, SessionEventKind, SessionEventLog};
+use crate::heartbeat_planner::{HeartbeatPlannerInput, HeartbeatPolicy, evaluate_heartbeat};
 use crate::session::{SessionState, SessionStateMachine};
 
 pub struct SessionDiagnostics {
@@ -16,6 +17,7 @@ pub struct SessionDiagnostics {
     pub failure_reason: Option<String>,
     pub enforcement_policy: Option<String>,
     pub enforcement_decision: Option<String>,
+    pub heartbeat_decision: Option<String>,
 }
 
 impl SessionDiagnostics {
@@ -28,12 +30,13 @@ impl SessionDiagnostics {
             state_history: machine.history().to_vec(),
             event_count: log.len(),
             last_event_message: log.last().map(|e| e.message.clone()),
-            ping_received_count: log.count_kind(crate::event_log::SessionEventKind::PingReceived),
-            pong_sent_count: log.count_kind(crate::event_log::SessionEventKind::PongSent),
+            ping_received_count: log.count_kind(SessionEventKind::PingReceived),
+            pong_sent_count: log.count_kind(SessionEventKind::PongSent),
             events: log.events().to_vec(),
             current_state,
             enforcement_policy: None,
             enforcement_decision: None,
+            heartbeat_decision: None,
         }
     }
 
@@ -45,6 +48,19 @@ impl SessionDiagnostics {
             evaluate_enforcement(&self.current_state, self.failure_reason.as_deref(), policy);
         self.enforcement_policy = Some(format!("{policy:?}"));
         self.enforcement_decision = Some(decision.to_text());
+        self
+    }
+
+    /// Attach heartbeat health context. Evaluates the policy decision from server-side
+    /// ping/pong counts (timeout_or_error is 0 in server-only view).
+    pub fn with_heartbeat_policy(mut self, policy: &HeartbeatPolicy) -> Self {
+        let input = HeartbeatPlannerInput {
+            ping_sent: self.ping_received_count as u64,
+            pong_received: self.pong_sent_count as u64,
+            timeout_or_error: 0,
+        };
+        let decision = evaluate_heartbeat(&input, policy);
+        self.heartbeat_decision = Some(decision.to_text());
         self
     }
 
@@ -73,6 +89,9 @@ impl SessionDiagnostics {
         out.push_str(&format!("event_count: {}\n", self.event_count));
         out.push_str(&format!("ping_received_count: {}\n", self.ping_received_count));
         out.push_str(&format!("pong_sent_count: {}\n", self.pong_sent_count));
+        if let Some(hb) = &self.heartbeat_decision {
+            out.push_str(&format!("{hb}\n"));
+        }
         for ev in &self.events {
             out.push_str(&format!(
                 "  [{}] {:?} @ {:?}: {}\n",
@@ -107,7 +126,8 @@ impl SessionDiagnostics {
         format!(
             "{{\"current_state\":\"{:?}\",\"ready_dry_run\":{},\"failure_reason\":{},\
 \"state_history\":[{}],\"event_count\":{},\"events\":[{}],\"last_event_message\":{},\
-\"ping_received_count\":{},\"pong_sent_count\":{},\"enforcement_policy\":{},\"enforcement_decision\":{}}}",
+\"ping_received_count\":{},\"pong_sent_count\":{},\"enforcement_policy\":{},\"enforcement_decision\":{},\
+\"heartbeat_decision\":{}}}",
             self.current_state,
             self.ready_dry_run,
             optional_json_string(self.failure_reason.as_deref()),
@@ -119,6 +139,7 @@ impl SessionDiagnostics {
             self.pong_sent_count,
             optional_json_string(self.enforcement_policy.as_deref()),
             optional_json_string(self.enforcement_decision.as_deref()),
+            optional_json_string(self.heartbeat_decision.as_deref()),
         )
     }
 }
