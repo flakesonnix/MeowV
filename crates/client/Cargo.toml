@@ -1,0 +1,12 @@
+[package]
+name = "client"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+protocol = { path = "../protocol" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
