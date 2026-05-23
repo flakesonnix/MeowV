@@ -30,6 +30,22 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.7
+
+Live session registry:
+
+- `SessionId` — monotonic u64 newtype, Copy, Display, never IP-based, deterministic in tests
+- `SessionRegistryEntry` — id, state, event_count, ready_dry_run, failed; no personal data
+- `SessionRegistrySnapshot` — aggregate counts + deterministic ordered session list
+- `SessionRegistry` — BTreeMap-backed, create/update/remove/snapshot API
+- `SessionGuard` RAII guard — removes session on drop, covers all `handle_client` exit paths
+- `SharedState` gains `registry: Arc<Mutex<SessionRegistry>>`
+- `handle_client` creates session at connect, updates state+event_count at every transition
+- `admin_stdin_loop` takes `Arc<SharedState>`, rebuilds live status per command
+- Admin `status` and `sessions` commands show real session counts
+- 12 session registry unit tests
+- `docs/session-registry.md`
+
 ## Milestone 2.6
 
 Server runtime status snapshot:
