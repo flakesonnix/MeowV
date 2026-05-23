@@ -63,6 +63,7 @@ update_session_event_count(&mut self, id: &SessionId, event_count: usize)
 update_session(&mut self, id: &SessionId, state: SessionState, event_count: usize)
 remove_session(&mut self, id: &SessionId)
 snapshot(&self) -> SessionRegistrySnapshot
+to_diagnostics_text(&self) -> String  (on `SessionRegistrySnapshot`)
 ```
 
 `update_session` combines state and event count in one lock acquisition.
@@ -107,7 +108,20 @@ registry on every command invocation:
 status     → shows connected/ready_dry_run/failed counts (live)
 sessions   → shows connected=N ready_dry_run=N failed=N (live)
 resources  → shows announcement_dir= (config-derived)
+diagnostics → shows per-session diagnostics via `to_diagnostics_text()` (live)
 ```
+
+The `diagnostics` command calls `SessionRegistrySnapshot::to_diagnostics_text()`
+which produces deterministic multi-line output:
+
+```
+sessions: 2  ready_dry_run: 1  failed: 0
+  session-1: state=Connected  events=1  ready_dry_run=false  failed=false
+  session-2: state=ReadyDryRun  events=11  ready_dry_run=true  failed=false
+```
+
+No timestamps, IP addresses, or personal data appear in the output. The format
+is stable across calls when session state has not changed.
 
 ## Privacy Constraints
 
@@ -123,8 +137,9 @@ resources  → shows announcement_dir= (config-derived)
 
 | Component | Scope |
 |---|---|
-| `SessionRegistry` | Server-wide aggregate; live session counts and states. |
+| `SessionRegistrySnapshot::to_diagnostics_text` | Deterministic diagnostics text for admin display. |
 | `ServerRuntimeStatus` | Config-derived snapshot; gains live counts from registry. |
+| `SessionRegistry` | Server-wide aggregate; live session counts and states. |
 | `SessionDiagnostics` | Per-session snapshot: state history + event log. |
 | `SessionEventLog` | Per-session ordered event record; local to handler task. |
 | Structured logs | Per-event chronological stream to stdout. |

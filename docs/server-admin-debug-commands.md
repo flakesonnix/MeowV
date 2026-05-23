@@ -29,12 +29,12 @@ Commands are case-insensitive. Leading and trailing whitespace is trimmed.
 Blank lines are silently ignored.
 
 | Command | Description |
-|---|---|
+|---|---|---|
 | `help` | Print the list of available commands. |
-| `status` | Report server running state and active policy mode. |
-| `sessions` | List current session data (placeholder; live data not yet wired). |
-| `resources` | List announced resource data (placeholder; live data not yet wired). |
-| `diagnostics` | Dump session diagnostics (placeholder; live data not yet wired). |
+| `status` | Report server running state and active policy mode (live). |
+| `sessions` | Show live session counts (connected / ready_dry_run / failed). |
+| `resources` | Show configured announcement resource directory. |
+| `diagnostics` | Dump live session diagnostics from `SessionRegistry` snapshot. Shows session IDs, state, event count, ready_dry_run, failed. No IP addresses or personal data. |
 | `quit` | Request a clean server shutdown. |
 
 ## Output
@@ -81,15 +81,18 @@ consistent with standard Unix daemon behaviour when stdin is a pipe.
 | `AdminCommandResult` | `crates/server/src/admin.rs` |
 | `parse_admin_command` | `crates/server/src/admin.rs` |
 | `handle_admin_command` | `crates/server/src/admin.rs` |
+| `handle_admin_command_with_status` | `crates/server/src/admin.rs` |
+| `handle_admin_command_with_context` | `crates/server/src/admin.rs` |
 | `AdminSection` | `crates/server/src/config.rs` |
 | `admin_stdin_loop` | `crates/server/src/lib.rs` (private) |
 | `accept_loop` | `crates/server/src/lib.rs` (private) |
 
-## Placeholder Status
+## Live vs Placeholder Status
 
-`sessions`, `resources`, and `diagnostics` return placeholder messages. Live
-session data is not yet wired to the admin command handler. A future milestone
-will replace these with real data drawn from the shared server state.
+`status`, `sessions`, and `diagnostics` return live data from the server runtime
+status snapshot and the session registry. `resources` returns the configured
+announcement directory from the server config. No command currently returns
+placeholder messages.
 
 ## Hard Boundaries
 

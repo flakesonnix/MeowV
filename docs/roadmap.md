@@ -30,6 +30,19 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.8
+
+Admin diagnostics backed by live session registry:
+
+- `SessionRegistrySnapshot::to_diagnostics_text()` — deterministic multi-line diagnostics output from registry snapshot
+- `handle_admin_command_with_context(command, status, registry)` — full-context handler accepting optional registry snapshot
+- `handle_admin_command` and `handle_admin_command_with_status` delegate to `handle_admin_command_with_context`
+- Admin `diagnostics` command emits live per-session state (session ID, state, event count, ready_dry_run, failed)
+- No IP addresses, timestamps, or personal data in diagnostics output
+- Local-only, admin-only: no remote API, no persistence, no telemetry
+- 7 admin unit tests (diagnostics with empty / connected / ready_dry_run / failed registry)
+- 7 registry unit tests (`to_diagnostics_text`)
+
 ## Milestone 2.7
 
 Live session registry:
