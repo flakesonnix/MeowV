@@ -36,11 +36,25 @@ pub enum DisconnectReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    Welcome { client_id: Uuid, motd: String, protocol_version: u32 },
-    ChatBroadcast { from: String, message: String },
-    EntitySnapshot { entities: Vec<EntityState> },
-    Disconnect { reason: DisconnectReason, message: String },
-    Error { message: String },
+    Welcome {
+        client_id: Uuid,
+        motd: String,
+        protocol_version: u32,
+    },
+    ChatBroadcast {
+        from: String,
+        message: String,
+    },
+    EntitySnapshot {
+        entities: Vec<EntityState>,
+    },
+    Disconnect {
+        reason: DisconnectReason,
+        message: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 pub fn encode_line<T: Serialize>(value: &T) -> Result<String, serde_json::Error> {

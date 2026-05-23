@@ -30,7 +30,9 @@ impl ClientConfig {
     fn load(args: &[String]) -> Result<Self> {
         let mut cfg = Self::default();
 
-        if let Some(path) = read_flag(args, "--config").or_else(|| env::var("MEOWV_CLIENT_CONFIG").ok()) {
+        if let Some(path) =
+            read_flag(args, "--config").or_else(|| env::var("MEOWV_CLIENT_CONFIG").ok())
+        {
             let raw = std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read client config file: {path}"))?;
             cfg = toml::from_str(&raw).context("failed to parse client config TOML")?;
@@ -104,12 +106,13 @@ async fn main() -> Result<()> {
 fn init_logging() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 }
 
 fn read_flag(args: &[String], name: &str) -> Option<String> {
-    args.windows(2).find(|window| window[0] == name).map(|window| window[1].clone())
+    args.windows(2)
+        .find(|window| window[0] == name)
+        .map(|window| window[1].clone())
 }

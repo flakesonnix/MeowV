@@ -37,7 +37,12 @@ async fn login_chat_and_snapshot_flow() -> Result<()> {
         )
         .await?;
     writer_half
-        .write_all(encode_line(&ClientMessage::Chat { message: "hello".to_string() })?.as_bytes())
+        .write_all(
+            encode_line(&ClientMessage::Chat {
+                message: "hello".to_string(),
+            })?
+            .as_bytes(),
+        )
         .await?;
 
     let welcome = read_packet(&mut lines).await?;
@@ -128,7 +133,8 @@ async fn read_packet<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> Result<Se
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let line = timeout(Duration::from_secs(2), lines.next_line()).await??
+    let line = timeout(Duration::from_secs(2), lines.next_line())
+        .await??
         .expect("stream closed before packet arrived");
     Ok(decode_server_line(&line)?)
 }
