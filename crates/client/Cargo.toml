@@ -6,6 +6,7 @@ version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+game_edition = { path = "../game_edition" }
 protocol = { path = "../protocol" }
 resource_manifest = { path = "../resource_manifest" }
 server_browser = { path = "../server_browser" }

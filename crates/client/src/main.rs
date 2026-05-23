@@ -1,6 +1,7 @@
 use std::env;
 
 use anyhow::{Context, Result};
+use game_edition::{GameEdition, GamePlatform};
 use protocol::{
     check_announcement_signature_stub, decode_server_line, encode_line, AnnouncedResource,
     ClientMessage, JoinGateDecision, JoinGateMode, JoinGateOutcome, ResourceAvailabilityEntry,
@@ -8,8 +9,9 @@ use protocol::{
     SignatureVerificationStatus, PROTOCOL_VERSION,
 };
 use resource_manifest::{
-    build_load_plan_from_root, build_pack_index, discover_resources, load_manifest_from_path,
-    resolve_load_order, verify_cache_for_resource, CacheFileStatus, ResourceEntrypointKind,
+    build_load_plan_from_root, build_pack_index, default_compatibility_context, discover_resources,
+    evaluate_manifest_compatibility, load_manifest_from_path, resolve_load_order,
+    verify_cache_for_resource, CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind,
     ResourceManifest, ResourceRuntimePhase, ResourceRuntimeState, ResourceRuntimeStateMachine,
 };
 use serde::Deserialize;
@@ -125,6 +127,11 @@ async fn main() -> Result<()> {
 
     if let Some(path) = read_flag(&args, "--resource-runtime-plan") {
         print_resource_runtime_plan(&path)?;
+        return Ok(());
+    }
+
+    if let Some(path) = read_flag(&args, "--check-resource-compatibility") {
+        print_resource_compatibility(&args, &path)?;
         return Ok(());
     }
 
@@ -403,6 +410,34 @@ fn print_resource_runtime_plan(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn print_resource_compatibility(args: &[String], path: &str) -> Result<()> {
+    let manifest = load_manifest_from_path(path)?;
+    let mut context = default_compatibility_context();
+
+    if let Some(raw) = read_flag(args, "--game-edition") {
+        context.game_edition = parse_game_edition(&raw)?;
+    }
+
+    if let Some(raw) = read_flag(args, "--game-platform") {
+        context.platform = parse_game_platform(&raw)?;
+    }
+
+    let report = evaluate_manifest_compatibility(&manifest, &context);
+    println!(
+        "Compatibility Status: {}",
+        format_compatibility_status(&report.status)
+    );
+    if report.issues.is_empty() {
+        println!("Issues: <none>");
+    } else {
+        for issue in report.issues {
+            println!("- {}: {}", issue.code, issue.message);
+        }
+    }
+
+    Ok(())
+}
+
 fn handle_resource_announcement(
     announcement: &protocol::ResourceAnnouncement,
     resource_cache: Option<&str>,
@@ -598,6 +633,32 @@ fn format_signature_status(status: &SignatureVerificationStatus) -> &'static str
         SignatureVerificationStatus::Invalid => "invalid",
         SignatureVerificationStatus::Valid => "valid",
         SignatureVerificationStatus::NotChecked => "not_checked",
+    }
+}
+
+fn format_compatibility_status(status: &CompatibilityStatus) -> &'static str {
+    match status {
+        CompatibilityStatus::Compatible => "compatible",
+        CompatibilityStatus::Incompatible => "incompatible",
+        CompatibilityStatus::Unknown => "unknown",
+    }
+}
+
+fn parse_game_edition(value: &str) -> Result<GameEdition> {
+    match value {
+        "legacy" => Ok(GameEdition::Legacy),
+        "enhanced" => Ok(GameEdition::Enhanced),
+        "unknown" => Ok(GameEdition::Unknown),
+        other => anyhow::bail!("invalid --game-edition: {other}"),
+    }
+}
+
+fn parse_game_platform(value: &str) -> Result<GamePlatform> {
+    match value {
+        "windows" => Ok(GamePlatform::Windows),
+        "linux" => Ok(GamePlatform::Linux),
+        "unknown" => Ok(GamePlatform::Unknown),
+        other => anyhow::bail!("invalid --game-platform: {other}"),
     }
 }
 
