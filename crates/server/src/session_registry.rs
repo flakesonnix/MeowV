@@ -58,12 +58,7 @@ impl SessionRegistrySnapshot {
             };
             lines.push(format!(
                 "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}",
-                entry.id,
-                entry.state,
-                entry.event_count,
-                entry.ready_dry_run,
-                entry.failed,
-                proto,
+                entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed, proto,
             ));
         }
         lines.join("\n")

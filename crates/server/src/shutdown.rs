@@ -129,18 +129,9 @@ mod tests {
 
     #[test]
     fn all_reasons_distinct() {
-        assert_ne!(
-            ShutdownReason::AdminQuit,
-            ShutdownReason::InternalError
-        );
-        assert_ne!(
-            ShutdownReason::InternalError,
-            ShutdownReason::TestRequested
-        );
-        assert_ne!(
-            ShutdownReason::TestRequested,
-            ShutdownReason::AdminQuit
-        );
+        assert_ne!(ShutdownReason::AdminQuit, ShutdownReason::InternalError);
+        assert_ne!(ShutdownReason::InternalError, ShutdownReason::TestRequested);
+        assert_ne!(ShutdownReason::TestRequested, ShutdownReason::AdminQuit);
     }
 
     #[test]
@@ -155,10 +146,7 @@ mod tests {
 
     #[test]
     fn display_reason_test_requested() {
-        assert_eq!(
-            ShutdownReason::TestRequested.to_string(),
-            "test_requested"
-        );
+        assert_eq!(ShutdownReason::TestRequested.to_string(), "test_requested");
     }
 
     #[test]
