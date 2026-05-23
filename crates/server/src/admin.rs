@@ -29,6 +29,7 @@ impl std::fmt::Display for AdminCommandParseError {
 
 impl std::error::Error for AdminCommandParseError {}
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AdminCommandResult {
     pub command: AdminCommand,
@@ -57,11 +58,13 @@ pub fn parse_admin_command(input: &str) -> Result<AdminCommand, AdminCommandPars
 }
 
 /// Handle a parsed admin command. Returns placeholder messages; `should_quit` only for `Quit`.
+#[allow(dead_code)]
 pub fn handle_admin_command(command: AdminCommand) -> AdminCommandResult {
     handle_admin_command_with_context(command, None, None)
 }
 
 /// Handle a parsed admin command with an optional runtime status snapshot.
+#[allow(dead_code)]
 pub fn handle_admin_command_with_status(
     command: AdminCommand,
     status: Option<&crate::status::ServerRuntimeStatus>,
@@ -411,8 +414,7 @@ mod tests {
     fn sessions_with_empty_registry() {
         use crate::session_registry::SessionRegistry;
         let snap = SessionRegistry::new().snapshot();
-        let result =
-            handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
         assert!(result.message.contains("no active sessions"));
         assert!(!result.should_quit);
     }
@@ -423,8 +425,7 @@ mod tests {
         let mut reg = SessionRegistry::new();
         reg.create_session();
         let snap = reg.snapshot();
-        let result =
-            handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
         assert!(result.message.contains("sessions: 1"));
         assert!(result.message.contains("session-1"));
         assert!(result.message.contains("protocol=unknown"));
@@ -439,8 +440,7 @@ mod tests {
         reg.set_protocol_version(&id, 1);
         reg.update_session_state(&id, SessionState::ReadyDryRun);
         let snap = reg.snapshot();
-        let result =
-            handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
         assert!(result.message.contains("ready_dry_run=true"));
         assert!(result.message.contains("ready_dry_run: 1"));
         assert!(result.message.contains("protocol=v1"));
