@@ -5,7 +5,8 @@ mod session;
 
 pub use config::{
     ConfigError, DiagnosticsFormat, DiagnosticsSection, JoinGateConfigMode, JoinGateSection,
-    ProtocolSection, ResourcesSection, ServerConfig, ServerSection,
+    LogFormat, LogLevel, LoggingSection, ProtocolSection, ResourcesSection, ServerConfig,
+    ServerSection,
 };
 
 use config::DiagnosticsFormat as Fmt;
@@ -81,13 +82,25 @@ pub async fn run_with_listener(listener: TcpListener, config: ServerConfig) -> R
     }
 }
 
-pub fn init_logging() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .json()
-        .init();
+pub fn init_logging(logging: &LoggingSection) {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(logging.level.as_str()));
+
+    match logging.format {
+        LogFormat::Text => {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_target(logging.show_targets)
+                .try_init();
+        }
+        LogFormat::Json => {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_target(logging.show_targets)
+                .json()
+                .try_init();
+        }
+    }
 }
 
 fn spawn_tick_loop(

@@ -139,6 +139,67 @@ impl Default for DiagnosticsSection {
     }
 }
 
+// --- Section: [logging] ---
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl Default for LogLevel {
+    fn default() -> Self {
+        LogLevel::Info
+    }
+}
+
+impl LogLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LogLevel::Trace => "trace",
+            LogLevel::Debug => "debug",
+            LogLevel::Info => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFormat {
+    Text,
+    Json,
+}
+
+impl Default for LogFormat {
+    fn default() -> Self {
+        LogFormat::Text
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LoggingSection {
+    pub level: LogLevel,
+    pub format: LogFormat,
+    pub show_targets: bool,
+}
+
+impl Default for LoggingSection {
+    fn default() -> Self {
+        Self {
+            level: LogLevel::Info,
+            format: LogFormat::Text,
+            show_targets: false,
+        }
+    }
+}
+
 // --- Top-level config ---
 
 #[derive(Debug, Clone, Deserialize)]
@@ -149,6 +210,7 @@ pub struct ServerConfig {
     pub resources: ResourcesSection,
     pub join_gate: JoinGateSection,
     pub diagnostics: DiagnosticsSection,
+    pub logging: LoggingSection,
 }
 
 impl Default for ServerConfig {
@@ -159,6 +221,7 @@ impl Default for ServerConfig {
             resources: ResourcesSection::default(),
             join_gate: JoinGateSection::default(),
             diagnostics: DiagnosticsSection::default(),
+            logging: LoggingSection::default(),
         }
     }
 }
@@ -389,5 +452,67 @@ tick_rate = 30
         assert_eq!(cfg.server.tick_rate, 30);
         assert_eq!(cfg.server.bind_addr, ServerSection::default().bind_addr);
         assert!(cfg.protocol.exact_version_required);
+    }
+
+    #[test]
+    fn default_logging_config_validates() {
+        let cfg = ServerConfig::default();
+        assert_eq!(cfg.logging.level, LogLevel::Info);
+        assert_eq!(cfg.logging.format, LogFormat::Text);
+        assert!(!cfg.logging.show_targets);
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn parse_valid_logging_section() {
+        let toml = r#"
+[logging]
+level = "debug"
+format = "json"
+show_targets = true
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.logging.level, LogLevel::Debug);
+        assert_eq!(cfg.logging.format, LogFormat::Json);
+        assert!(cfg.logging.show_targets);
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn all_log_levels_parse() {
+        for level in &["trace", "debug", "info", "warn", "error"] {
+            let toml = format!("[logging]\nlevel = \"{level}\"");
+            let cfg: ServerConfig = toml::from_str(&toml).unwrap();
+            cfg.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn invalid_log_level_rejected_at_parse() {
+        let toml = r#"
+[logging]
+level = "verbose"
+"#;
+        let result: Result<ServerConfig, _> = toml::from_str(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_log_format_rejected_at_parse() {
+        let toml = r#"
+[logging]
+format = "binary"
+"#;
+        let result: Result<ServerConfig, _> = toml::from_str(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn log_level_as_str_matches_serde_name() {
+        assert_eq!(LogLevel::Trace.as_str(), "trace");
+        assert_eq!(LogLevel::Debug.as_str(), "debug");
+        assert_eq!(LogLevel::Info.as_str(), "info");
+        assert_eq!(LogLevel::Warn.as_str(), "warn");
+        assert_eq!(LogLevel::Error.as_str(), "error");
     }
 }
