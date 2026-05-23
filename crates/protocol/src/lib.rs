@@ -88,6 +88,29 @@ pub struct ResourcePolicyEvaluation {
     pub invalid_recommended: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinGateMode {
+    DryRun,
+    Enforced,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinGateOutcome {
+    WouldAllow,
+    WouldWarn,
+    WouldBlock,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JoinGateDecision {
+    pub mode: JoinGateMode,
+    pub outcome: JoinGateOutcome,
+    pub reason: String,
+    pub policy_evaluation: ResourcePolicyEvaluation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
@@ -120,6 +143,7 @@ pub enum ServerMessage {
         entities: Vec<EntityState>,
     },
     ResourceAnnouncement(ResourceAnnouncement),
+    JoinGateDecision(JoinGateDecision),
     Disconnect {
         reason: DisconnectReason,
         message: String,
@@ -218,6 +242,30 @@ pub fn evaluate_resource_policy(
     evaluation
 }
 
+pub fn build_join_gate_decision(policy_evaluation: ResourcePolicyEvaluation) -> JoinGateDecision {
+    let (outcome, reason) = match policy_evaluation.decision {
+        ResourceJoinDecision::Allowed => (
+            JoinGateOutcome::WouldAllow,
+            "all required resources available".to_string(),
+        ),
+        ResourceJoinDecision::WarningOnly => (
+            JoinGateOutcome::WouldWarn,
+            "optional or recommended resources are missing or invalid".to_string(),
+        ),
+        ResourceJoinDecision::Blocked => (
+            JoinGateOutcome::WouldBlock,
+            "required resources are missing or invalid".to_string(),
+        ),
+    };
+
+    JoinGateDecision {
+        mode: JoinGateMode::DryRun,
+        outcome,
+        reason,
+        policy_evaluation,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +327,69 @@ mod tests {
             client,
             ClientMessage::ResourceAvailabilityReport(_)
         ));
+    }
+
+    #[test]
+    fn allowed_policy_maps_to_would_allow() {
+        let decision = build_join_gate_decision(ResourcePolicyEvaluation {
+            decision: ResourceJoinDecision::Allowed,
+            missing_required: vec![],
+            invalid_required: vec![],
+            missing_optional: vec![],
+            invalid_optional: vec![],
+            missing_recommended: vec![],
+            invalid_recommended: vec![],
+        });
+        assert_eq!(decision.outcome, JoinGateOutcome::WouldAllow);
+        assert_eq!(decision.mode, JoinGateMode::DryRun);
+    }
+
+    #[test]
+    fn warning_only_policy_maps_to_would_warn() {
+        let decision = build_join_gate_decision(ResourcePolicyEvaluation {
+            decision: ResourceJoinDecision::WarningOnly,
+            missing_required: vec![],
+            invalid_required: vec![],
+            missing_optional: vec!["chat:resource.toml".to_string()],
+            invalid_optional: vec![],
+            missing_recommended: vec![],
+            invalid_recommended: vec![],
+        });
+        assert_eq!(decision.outcome, JoinGateOutcome::WouldWarn);
+    }
+
+    #[test]
+    fn blocked_policy_maps_to_would_block() {
+        let decision = build_join_gate_decision(ResourcePolicyEvaluation {
+            decision: ResourceJoinDecision::Blocked,
+            missing_required: vec!["chat:resource.toml".to_string()],
+            invalid_required: vec![],
+            missing_optional: vec![],
+            invalid_optional: vec![],
+            missing_recommended: vec![],
+            invalid_recommended: vec![],
+        });
+        assert_eq!(decision.outcome, JoinGateOutcome::WouldBlock);
+    }
+
+    #[test]
+    fn join_gate_decision_serializes_deserializes() {
+        let decision = build_join_gate_decision(ResourcePolicyEvaluation {
+            decision: ResourceJoinDecision::Allowed,
+            missing_required: vec![],
+            invalid_required: vec![],
+            missing_optional: vec![],
+            invalid_optional: vec![],
+            missing_recommended: vec![],
+            invalid_recommended: vec![],
+        });
+
+        let line = encode_line(&ServerMessage::JoinGateDecision(decision.clone())).unwrap();
+        let decoded = decode_server_line(line.trim()).unwrap();
+        match decoded {
+            ServerMessage::JoinGateDecision(actual) => assert_eq!(actual, decision),
+            other => panic!("unexpected packet: {other:?}"),
+        }
     }
 
     #[test]
