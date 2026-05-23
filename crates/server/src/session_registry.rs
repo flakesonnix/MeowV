@@ -26,6 +26,7 @@ pub struct SessionRegistryEntry {
     pub event_count: usize,
     pub ready_dry_run: bool,
     pub failed: bool,
+    pub protocol_version: Option<u32>,
 }
 
 /// Point-in-time aggregate snapshot of all registered sessions.
@@ -51,9 +52,18 @@ impl SessionRegistrySnapshot {
             self.connected_sessions, self.ready_dry_run_sessions, self.failed_sessions,
         )];
         for entry in &self.sessions {
+            let proto = match entry.protocol_version {
+                Some(v) => format!("protocol=v{}", v),
+                None => "protocol=unknown".to_string(),
+            };
             lines.push(format!(
-                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}",
-                entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed,
+                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}",
+                entry.id,
+                entry.state,
+                entry.event_count,
+                entry.ready_dry_run,
+                entry.failed,
+                proto,
             ));
         }
         lines.join("\n")
@@ -88,9 +98,17 @@ impl SessionRegistry {
                 event_count: 0,
                 ready_dry_run: false,
                 failed: false,
+                protocol_version: None,
             },
         );
         id
+    }
+
+    /// Set the protocol version for a session (call after version check succeeds).
+    pub fn set_protocol_version(&mut self, id: &SessionId, version: u32) {
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.protocol_version = Some(version);
+        }
     }
 
     /// Update the state of an existing session.

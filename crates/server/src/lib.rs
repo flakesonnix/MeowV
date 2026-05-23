@@ -171,7 +171,9 @@ async fn admin_stdin_loop(
     config: ServerConfig,
     state: Arc<SharedState>,
 ) {
-    use admin::{AdminCommandParseError, handle_admin_command_with_status, parse_admin_command};
+    use admin::{
+        handle_admin_command_with_context, parse_admin_command, AdminCommandParseError,
+    };
 
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
@@ -190,7 +192,11 @@ async fn admin_stdin_loop(
                             reg_snap.ready_dry_run_sessions,
                             reg_snap.failed_sessions,
                         );
-                    let result = handle_admin_command_with_status(cmd, Some(&current_status));
+                    let result = handle_admin_command_with_context(
+                        cmd,
+                        Some(&current_status),
+                        Some(&reg_snap),
+                    );
                     info!(message = %result.message, "admin");
                     if result.should_quit {
                         state.shutdown.lock().unwrap().request(shutdown::ShutdownReason::AdminQuit);
@@ -360,11 +366,11 @@ async fn handle_client(
                     SessionState::VersionChecked,
                     format!("protocol version {protocol_version} matched"),
                 );
-                state.registry.lock().unwrap().update_session(
-                    &session_id,
-                    session.state().clone(),
-                    event_log.len(),
-                );
+                {
+                    let mut reg = state.registry.lock().unwrap();
+                    reg.set_protocol_version(&session_id, protocol_version);
+                    reg.update_session(&session_id, session.state().clone(), event_log.len());
+                }
                 info!(%client_id, state = ?session.state(), "session: version checked");
 
                 let server_profile = current_protocol_profile();

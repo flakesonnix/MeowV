@@ -87,17 +87,22 @@ pub fn handle_admin_command_with_context(
             }),
             false,
         ),
-        AdminCommand::Sessions => (
-            status
-                .map(|s| {
-                    format!(
-                        "connected={} ready_dry_run={} failed={}",
-                        s.connected_sessions, s.ready_dry_run_sessions, s.failed_sessions,
-                    )
-                })
-                .unwrap_or_else(|| "live session data not yet available (placeholder)".to_string()),
-            false,
-        ),
+        AdminCommand::Sessions => {
+            let msg = match registry {
+                Some(r) => r.to_diagnostics_text(),
+                None => status
+                    .map(|s| {
+                        format!(
+                            "connected={} ready_dry_run={} failed={}",
+                            s.connected_sessions, s.ready_dry_run_sessions, s.failed_sessions,
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        "live session data not yet available (placeholder)".to_string()
+                    }),
+            };
+            (msg, false)
+        }
         AdminCommand::Resources => (
             status
                 .map(|s| format!("announcement_dir={}", s.resource_announcement_dir))
@@ -398,5 +403,70 @@ mod tests {
     fn diagnostics_falls_back_to_placeholder_without_registry() {
         let result = handle_admin_command_with_context(AdminCommand::Diagnostics, None, None);
         assert!(result.message.contains("placeholder"));
+    }
+
+    // --- Sessions command tests ---
+
+    #[test]
+    fn sessions_with_empty_registry() {
+        use crate::session_registry::SessionRegistry;
+        let snap = SessionRegistry::new().snapshot();
+        let result =
+            handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("no active sessions"));
+        assert!(!result.should_quit);
+    }
+
+    #[test]
+    fn sessions_with_connected_session() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let result =
+            handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("sessions: 1"));
+        assert!(result.message.contains("session-1"));
+        assert!(result.message.contains("protocol=unknown"));
+    }
+
+    #[test]
+    fn sessions_with_ready_dry_run_and_protocol_version() {
+        use crate::session::SessionState;
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.set_protocol_version(&id, 1);
+        reg.update_session_state(&id, SessionState::ReadyDryRun);
+        let snap = reg.snapshot();
+        let result =
+            handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("ready_dry_run=true"));
+        assert!(result.message.contains("ready_dry_run: 1"));
+        assert!(result.message.contains("protocol=v1"));
+    }
+
+    #[test]
+    fn sessions_falls_back_to_counts_without_registry() {
+        use crate::config::ServerConfig;
+        use crate::status::ServerRuntimeStatus;
+        let status =
+            ServerRuntimeStatus::from_config(&ServerConfig::default()).with_session_counts(2, 1, 1);
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, Some(&status), None);
+        assert!(result.message.contains("connected=2"));
+        assert!(result.message.contains("ready_dry_run=1"));
+        assert!(result.message.contains("failed=1"));
+        assert!(!result.message.contains("session-"));
+    }
+
+    #[test]
+    fn sessions_with_registry_preferred_over_status() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        // Registry output shows session-1, not fallback count format
+        assert!(result.message.contains("session-1"));
     }
 }
