@@ -1,5 +1,7 @@
+mod event_log;
 mod session;
 
+use event_log::{SessionEventKind, SessionEventLog};
 use session::{SessionState, SessionStateError, SessionStateMachine};
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
