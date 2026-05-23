@@ -47,6 +47,7 @@ This reuses existing cache verification behavior.
 - resource download pipeline
 - repair/update workflow
 - stronger per-resource compatibility metadata
+- server-side policy enforcement
 
 ## Clean-Room Note
 
