@@ -15,11 +15,20 @@ Standalone prototype:
 
 Protocol hardening:
 
-- version negotiation
+- compatibility policy docs
 - heartbeat/ping
-- disconnect reasons
 - better config files
 - integration tests
+
+## Milestone 1.1
+
+Protocol compatibility work:
+
+- explicit version negotiation flow
+- compatibility matrix by release
+- upgrade/deprecation rules
+- wire-format change checklist
+
 
 ## Milestone 2
 

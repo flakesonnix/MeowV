@@ -8,7 +8,7 @@ Milestone 0 proves the project skeleton, development environment, and packet flo
 
 ### `crates/protocol`
 
-Shared packet definitions and line-delimited JSON encode/decode helpers.
+Shared packet definitions, protocol version constant, disconnect reasons, and line-delimited JSON encode/decode helpers.
 
 ### `crates/server`
 
@@ -23,13 +23,13 @@ Async TCP server with:
 
 ### `crates/client`
 
-Dummy client used for protocol and UX testing. It connects, logs in, sends one chat message, and prints server packets.
+Dummy client used for protocol and UX testing. It loads config, connects, logs in with protocol version, sends one chat message, and prints server packets.
 
 ## Data Flow
 
 1. Client connects over TCP.
-2. Client sends `ClientMessage::Login`.
-3. Server responds with `ServerMessage::Welcome`.
+2. Client sends `ClientMessage::Login` with protocol version.
+3. Server either responds with `ServerMessage::Welcome` or clean `ServerMessage::Disconnect`.
 4. Client may send `ClientMessage::Chat`.
 5. Server broadcasts chat and periodic fake entity snapshots.
 

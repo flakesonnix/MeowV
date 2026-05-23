@@ -8,6 +8,7 @@ Milestone 0 provides:
 - shared protocol crate
 - async server
 - dummy client
+- protocol version handshake
 - login, chat, and fake entity position sync packets
 - tick loop
 - structured logging
@@ -38,14 +39,22 @@ In another terminal:
 
 ```bash
 nix develop
-cargo run -p client -- --name alice --message "hello world"
+cargo run -p client -- --config example.client.toml --name alice --message "hello world"
+```
+
+Formatting and linting inside Nix shell:
+
+```bash
+nix develop
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ### Plain Rust
 
 ```bash
 cargo run -p server
-cargo run -p client -- --name alice --message "hello world"
+cargo run -p client -- --config example.client.toml --name alice --message "hello world"
 ```
 
 ## Config
@@ -67,6 +76,19 @@ Use example config file:
 MEOWV_CONFIG=example.server.toml cargo run -p server
 ```
 
+Client example config:
+
+```bash
+MEOWV_CLIENT_CONFIG=example.client.toml cargo run -p client
+```
+
+Override precedence for client config:
+
+- defaults
+- config file
+- environment variables
+- CLI flags
+
 ## Workspace Commands
 
 ```bash
@@ -75,6 +97,12 @@ cargo clippy --workspace --all-targets
 cargo check --workspace
 cargo test --workspace
 ```
+
+## Protocol Notes
+
+- Current prototype protocol version: `1`
+- Login must include `protocol_version`
+- Server rejects mismatched versions with `disconnect` packet
 
 ## Milestone 0 Notes
 
