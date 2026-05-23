@@ -39,11 +39,28 @@
 | MS | Title |
 |---|---|
 | 3.0 | Architecture refresh — crate/module map, pipeline docs, security boundaries |
-| 3.1 | Server lifecycle config cleanup — startup/shutdown CLI, stricter validation |
+| 3.1 | Server lifecycle config — summary text, startup logging, coverage |
 | 3.2 | Resource download design spec — protocol design doc only, no implementation |
 | 3.3 | Local resource cache repair — design-only, no network |
 | 3.4 | Real signature verification — announcement signature checking |
 | 3.5 | Minimal sandbox runtime design — no-exec design doc, no implementation |
+
+---
+
+## Milestone 3.1
+
+Server lifecycle config cleanup:
+
+- `ServerConfig::to_lifecycle_summary_text()` — deterministic multi-line text
+  covering server identity, protocol policy flags, resource dir, join gate mode,
+  diagnostics settings, admin mode, logging level/format
+- Logged at startup via `info!("server lifecycle config:\n{}", ...)` alongside
+  the existing structured log line
+- 6 new config unit tests (deterministic, includes dry-run policies, includes
+  admin/logging/diagnostics, includes server identity, reflects admin enabled,
+  no IP/personal data)
+- All existing validation rules unchanged and still enforced
+- `docs/server-config.md` updated with lifecycle summary documentation
 
 ---
 

@@ -153,10 +153,37 @@ All other fields use defaults.
 See `example.server.toml` in the workspace root for a fully-annotated
 example covering all sections.
 
+## Lifecycle Summary
+
+`ServerConfig::to_lifecycle_summary_text()` produces a deterministic multi-line
+text dump of the server's lifecycle configuration at startup. It is logged
+as a single `info` event immediately after the bind line:
+
+```
+INFO server lifecycle config:
+server_name: MeowV Local Dev Server
+bind_addr: 127.0.0.1:7000
+protocol_version: 17
+exact_version_required: true
+negotiation_dry_run: true
+capability_gates_report_only: true
+resource_announcement_dir: examples/resources/chat
+join_gate_mode: dry_run
+join_gate_enforcement: disabled
+diagnostics_print: true
+diagnostics_format: text
+admin_stdin: disabled
+log_level: info
+log_format: text
+```
+
+The summary covers all active config sections and policy flags. No IP
+addresses, personal data, or timestamps appear in the output.
+
 ## Privacy and Security
 
 - Config values are logged at startup (`info` level: bind address, tick
-  rate, server name).
+  rate, server name, full lifecycle summary).
 - Resource paths are relative to the workspace root and must not contain
   `..`.
 - No IP addresses from connected clients are stored in the config.
