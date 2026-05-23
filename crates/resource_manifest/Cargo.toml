@@ -8,4 +8,5 @@ version.workspace = true
 anyhow.workspace = true
 protocol = { path = "../protocol" }
 serde.workspace = true
+sha2 = "0.10"
 toml.workspace = true

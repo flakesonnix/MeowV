@@ -1,8 +1,13 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use protocol::PROTOCOL_VERSION;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,6 +43,20 @@ pub struct ResourceManifest {
     pub edition_compatibility: EditionCompatibility,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceFileEntry {
+    pub relative_path: PathBuf,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourcePackIndex {
+    pub manifest: ResourceManifest,
+    pub files: Vec<ResourceFileEntry>,
+    pub total_size_bytes: u64,
+}
+
 pub fn load_manifest_from_path(path: impl AsRef<Path>) -> Result<ResourceManifest> {
     let path = path.as_ref();
     let raw = fs::read_to_string(path)
@@ -50,6 +69,61 @@ pub fn parse_manifest_toml(input: &str) -> Result<ResourceManifest> {
         toml::from_str(input).context("failed to parse manifest TOML")?;
     validate_manifest(&manifest)?;
     Ok(manifest)
+}
+
+pub fn build_pack_index(resource_dir: impl AsRef<Path>) -> Result<ResourcePackIndex> {
+    let resource_dir = resource_dir.as_ref();
+    let manifest_path = resource_dir.join("resource.toml");
+    anyhow::ensure!(
+        manifest_path.is_file(),
+        "resource.toml not found in resource directory"
+    );
+
+    let manifest = load_manifest_from_path(&manifest_path)?;
+    let mut files = Vec::new();
+
+    collect_files(resource_dir, resource_dir, &mut files)?;
+    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+
+    let total_size_bytes = files.iter().map(|file| file.size_bytes).sum();
+
+    Ok(ResourcePackIndex {
+        manifest,
+        files,
+        total_size_bytes,
+    })
+}
+
+pub fn hash_file_sha256(path: impl AsRef<Path>) -> Result<String> {
+    let path = path.as_ref();
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("failed to open file for hashing: {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read file for hashing: {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn validate_resource_file_path(path: &Path) -> Result<()> {
+    anyhow::ensure!(!path.is_absolute(), "resource file path must be relative");
+    anyhow::ensure!(
+        !path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir)),
+        "resource file path cannot contain parent-directory traversal"
+    );
+    Ok(())
 }
 
 fn validate_manifest(manifest: &ResourceManifest) -> Result<()> {
@@ -94,7 +168,7 @@ fn validate_entrypoint_path(path: &str) -> Result<()> {
     anyhow::ensure!(
         !candidate
             .components()
-            .any(|component| { matches!(component, std::path::Component::ParentDir) }),
+            .any(|component| matches!(component, std::path::Component::ParentDir)),
         "entrypoint path cannot contain parent-directory traversal"
     );
     Ok(())
@@ -107,8 +181,60 @@ fn is_valid_resource_name(name: &str) -> bool {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
 }
 
+fn collect_files(
+    resource_root: &Path,
+    current_dir: &Path,
+    files: &mut Vec<ResourceFileEntry>,
+) -> Result<()> {
+    for entry in fs::read_dir(current_dir).with_context(|| {
+        format!(
+            "failed to read resource directory: {}",
+            current_dir.display()
+        )
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("failed to read metadata: {}", path.display()))?;
+
+        anyhow::ensure!(
+            !metadata.file_type().is_symlink(),
+            "symlinks are not supported in resource packs"
+        );
+
+        if metadata.is_dir() {
+            collect_files(resource_root, &path, files)?;
+            continue;
+        }
+
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let relative_path = path
+            .strip_prefix(resource_root)
+            .with_context(|| format!("failed to build relative path: {}", path.display()))?
+            .to_path_buf();
+        validate_resource_file_path(&relative_path)?;
+
+        files.push(ResourceFileEntry {
+            relative_path,
+            size_bytes: metadata.len(),
+            sha256: hash_file_sha256(&path)?,
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use super::*;
 
     #[test]
@@ -182,6 +308,128 @@ mod tests {
         );
     }
 
+    #[test]
+    fn index_valid_resource_directory() {
+        let dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "print('server')")],
+        );
+
+        let index = build_pack_index(&dir).unwrap();
+        assert_eq!(index.manifest.name, "chat");
+        assert_eq!(index.files.len(), 2);
+    }
+
+    #[test]
+    fn hash_known_file_content() {
+        let path = write_temp_file("hash.txt", "abc");
+        let hash = hash_file_sha256(&path).unwrap();
+        assert_eq!(
+            hash,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn missing_resource_toml_returns_error() {
+        let dir = unique_temp_dir("missing-manifest");
+        fs::create_dir_all(&dir).unwrap();
+
+        let err = build_pack_index(&dir).unwrap_err();
+        assert!(err.to_string().contains("resource.toml not found"));
+    }
+
+    #[test]
+    fn invalid_manifest_returns_error() {
+        let dir = create_resource_dir(
+            valid_manifest()
+                .replace("name = \"chat\"", "name = \"Chat!\"")
+                .as_str(),
+            &[(&PathBuf::from("server/main.lua"), "print('server')")],
+        );
+
+        let err = build_pack_index(&dir).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("resource name contains invalid characters"));
+    }
+
+    #[test]
+    fn total_size_calculation_is_correct() {
+        let dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("server/main.lua"), "abc"),
+                (&PathBuf::from("client/main.lua"), "hello"),
+            ],
+        );
+
+        let index = build_pack_index(&dir).unwrap();
+        let expected: u64 = index.files.iter().map(|file| file.size_bytes).sum();
+        assert_eq!(index.total_size_bytes, expected);
+    }
+
+    #[test]
+    fn deterministic_sorting_orders_by_relative_path() {
+        let dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("zeta.lua"), "z"),
+                (&PathBuf::from("alpha.lua"), "a"),
+            ],
+        );
+
+        let index = build_pack_index(&dir).unwrap();
+        let paths: Vec<_> = index
+            .files
+            .iter()
+            .map(|entry| entry.relative_path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("alpha.lua"),
+                PathBuf::from("resource.toml"),
+                PathBuf::from("zeta.lua")
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_if_platform_supports_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = create_resource_dir(valid_manifest(), &[]);
+        let target = dir.join("resource.toml");
+        let link = dir.join("linked.toml");
+        symlink(&target, &link).unwrap();
+
+        let err = build_pack_index(&dir).unwrap_err();
+        assert!(err.to_string().contains("symlinks are not supported"));
+    }
+
+    #[test]
+    fn reject_absolute_resource_file_path() {
+        let err = validate_resource_file_path(Path::new("/tmp/file.txt")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("resource file path must be relative"));
+    }
+
+    #[test]
+    fn reject_parent_traversal_resource_file_path() {
+        let err = validate_resource_file_path(Path::new("../file.txt")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("resource file path cannot contain parent-directory traversal"));
+    }
+
+    #[test]
+    fn accept_normal_relative_resource_file_path() {
+        validate_resource_file_path(Path::new("server/main.lua")).unwrap();
+    }
+
     fn valid_manifest() -> &'static str {
         r#"name = "chat"
 version = "0.1.0"
@@ -199,5 +447,38 @@ client = "client/main.js"
 [[dependencies]]
 name = "core_ui"
 "#
+    }
+
+    fn create_resource_dir(manifest: &str, files: &[(&PathBuf, &str)]) -> PathBuf {
+        let dir = unique_temp_dir("resource-pack");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("resource.toml"), manifest).unwrap();
+
+        for (relative_path, contents) in files {
+            let full_path = dir.join(relative_path);
+            if let Some(parent) = full_path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(full_path, contents).unwrap();
+        }
+
+        dir
+    }
+
+    fn write_temp_file(name: &str, contents: &str) -> PathBuf {
+        let path = unique_temp_dir(name).join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("meowv-{label}-{unique}"))
     }
 }
