@@ -370,4 +370,70 @@ mod tests {
         assert!(text.contains("ready_dry_run: true"));
         assert!(text.contains("event_count: 11"));
     }
+
+    #[test]
+    fn heartbeat_decision_none_by_default() {
+        let sm = SessionStateMachine::new();
+        let log = SessionEventLog::new();
+        let diag = SessionDiagnostics::from_parts(&sm, &log);
+        assert!(diag.heartbeat_decision.is_none());
+    }
+
+    #[test]
+    fn with_heartbeat_policy_no_activity_sets_no_heartbeat_observed() {
+        use crate::heartbeat_planner::HeartbeatPolicy;
+        let sm = SessionStateMachine::new();
+        let log = SessionEventLog::new();
+        let diag = SessionDiagnostics::from_parts(&sm, &log)
+            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+        let decision = diag.heartbeat_decision.as_deref().unwrap();
+        assert!(decision.contains("no_heartbeat_observed"));
+    }
+
+    #[test]
+    fn with_heartbeat_policy_ping_pong_sets_healthy() {
+        use crate::heartbeat_planner::HeartbeatPolicy;
+        let sm = SessionStateMachine::new();
+        let mut log = SessionEventLog::new();
+        log.record(
+            SessionEventKind::PingReceived,
+            SessionState::Connected,
+            "ping 1",
+        );
+        log.record(
+            SessionEventKind::PongSent,
+            SessionState::Connected,
+            "pong 1",
+        );
+        let diag = SessionDiagnostics::from_parts(&sm, &log)
+            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+        let decision = diag.heartbeat_decision.as_deref().unwrap();
+        assert!(decision.contains("healthy"));
+    }
+
+    #[test]
+    fn with_heartbeat_policy_decision_appears_in_text() {
+        use crate::heartbeat_planner::HeartbeatPolicy;
+        let sm = SessionStateMachine::new();
+        let log = SessionEventLog::new();
+        let text = SessionDiagnostics::from_parts(&sm, &log)
+            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly)
+            .to_text();
+        assert!(text.contains("heartbeat_decision:"));
+        assert!(text.contains("no_heartbeat_observed"));
+    }
+
+    #[test]
+    fn with_heartbeat_policy_decision_in_text_is_deterministic() {
+        use crate::heartbeat_planner::HeartbeatPolicy;
+        let sm = SessionStateMachine::new();
+        let log = SessionEventLog::new();
+        let t1 = SessionDiagnostics::from_parts(&sm, &log)
+            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly)
+            .to_text();
+        let t2 = SessionDiagnostics::from_parts(&sm, &log)
+            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly)
+            .to_text();
+        assert_eq!(t1, t2);
+    }
 }
