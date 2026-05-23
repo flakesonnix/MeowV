@@ -30,6 +30,22 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.9
+
+Graceful shutdown state flow:
+
+- `ShutdownReason` enum (`AdminQuit`, `InternalError`, `TestRequested`) with Display
+- `ShutdownState` — in-memory shutdown flag with first-wins reason; `new()`, `request(reason)`, `is_requested()`, `reason()`
+- `ShutdownSummary` — reason + runtime status text + registry diagnostics text
+- `build_shutdown_summary(config, registry_snapshot, reason)` — deterministic helper using existing `ServerRuntimeStatus` and `SessionRegistrySnapshot`
+- `SharedState` gains `shutdown: Mutex<ShutdownState>`
+- `admin_stdin_loop` calls `shutdown.request(AdminQuit)` before sending quit signal
+- `run_with_listener` logs final shutdown summary after accept loop exits (reason, status dump, registry dump)
+- Local-only: no remote API, no persistence, no telemetry, no file writes
+- No IP addresses or personal data in shutdown summary
+- 15 new shutdown unit tests (state not requested, request sets reason, repeated request keeps first, summary includes reason/status/registry, deterministic, no personal data, Display for all reasons)
+- `docs/graceful-shutdown.md`
+
 ## Milestone 2.8
 
 Admin diagnostics backed by live session registry:
