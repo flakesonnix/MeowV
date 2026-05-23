@@ -2,7 +2,7 @@ use std::env;
 
 use anyhow::{Context, Result};
 use protocol::{decode_server_line, encode_line, ClientMessage, PROTOCOL_VERSION};
-use resource_manifest::{load_manifest_from_path, ResourceManifest};
+use resource_manifest::{build_pack_index, load_manifest_from_path, ResourceManifest};
 use serde::Deserialize;
 use server_browser::{filter_current_protocol, LocalJsonServerListSource, ServerListSource};
 use tokio::{
@@ -81,6 +81,11 @@ async fn main() -> Result<()> {
 
     if let Some(path) = read_flag(&args, "--resource-manifest") {
         print_resource_manifest(&path)?;
+        return Ok(());
+    }
+
+    if let Some(path) = read_flag(&args, "--resource-index") {
+        print_resource_index(&path)?;
         return Ok(());
     }
 
@@ -170,6 +175,26 @@ fn print_resource_manifest(path: &str) -> Result<()> {
         format_dependencies(&manifest).unwrap_or_else(|| "<none>".to_string())
     );
     println!("Tags: {}", manifest.tags.join(", "));
+
+    Ok(())
+}
+
+fn print_resource_index(path: &str) -> Result<()> {
+    let index = build_pack_index(path)?;
+
+    println!("Name: {}", index.manifest.name);
+    println!("Version: {}", index.manifest.version);
+    println!("Files: {}", index.files.len());
+    println!("Total Size: {} bytes", index.total_size_bytes);
+
+    for file in &index.files {
+        println!(
+            "- {} | {} bytes | {}",
+            file.relative_path.display(),
+            file.size_bytes,
+            file.sha256
+        );
+    }
 
     Ok(())
 }
