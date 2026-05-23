@@ -3,12 +3,14 @@ mod config;
 mod diagnostics;
 mod event_log;
 mod session;
+mod status;
 
 pub use config::{
     AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, JoinGateConfigMode,
     JoinGateSection, LogFormat, LogLevel, LoggingSection, ProtocolSection, ResourcesSection,
     ServerConfig, ServerSection,
 };
+pub use status::ServerRuntimeStatus;
 
 use config::DiagnosticsFormat as Fmt;
 use diagnostics::SessionDiagnostics;
