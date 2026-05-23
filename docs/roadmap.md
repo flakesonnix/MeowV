@@ -30,6 +30,22 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.5
+
+Local server admin debug commands:
+
+- `AdminCommand` enum (Help, Status, Sessions, Resources, Diagnostics, Quit)
+- `AdminCommandParseError` (Empty, UnknownCommand) with Display + Error impls
+- `AdminCommandResult` { command, message, should_quit }
+- `parse_admin_command` — case-insensitive, whitespace-trimmed, 6 commands
+- `handle_admin_command` — placeholder messages; `should_quit=true` for Quit only
+- `AdminSection { local_stdin_enabled: bool }` added to `ServerConfig`
+- `run_with_listener` refactored into `accept_loop` + `admin_stdin_loop`
+- stdin loop gated on `config.admin.local_stdin_enabled`; oneshot channel signals quit
+- `example.server.toml` gains `[admin]` section
+- 12 admin parser unit tests; 3 AdminSection config tests
+- `docs/server-admin-debug-commands.md`
+
 ## Milestone 2.4
 
 Structured logging / tracing config:
