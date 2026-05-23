@@ -469,4 +469,39 @@ mod tests {
         // Registry output shows session-1, not fallback count format
         assert!(result.message.contains("session-1"));
     }
+
+    #[test]
+    fn sessions_shows_zero_heartbeat_counts_with_no_activity() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("ping_rx=0"));
+        assert!(result.message.contains("pong_tx=0"));
+    }
+
+    #[test]
+    fn sessions_shows_nonzero_heartbeat_counts_after_ping_pong() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 1, 1);
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("ping_rx=1"));
+        assert!(result.message.contains("pong_tx=1"));
+    }
+
+    #[test]
+    fn sessions_heartbeat_output_is_deterministic() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 2, 2);
+        let snap = reg.snapshot();
+        let r1 = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        let r2 = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert_eq!(r1.message, r2.message);
+    }
 }
