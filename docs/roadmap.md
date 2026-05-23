@@ -30,6 +30,19 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.2
+
+Session diagnostics / debug dump:
+
+- `SessionDiagnostics` struct collecting current state, history, event log,
+  last event message, ready_dry_run flag, failure reason
+- `from_parts(&SessionStateMachine, &SessionEventLog) -> Self` — read-only snapshot
+- `to_text()` — deterministic human-readable multi-line output
+- `to_json_stub()` — manually-formatted JSON, no serde dependency added
+- printed to server info log at ReadyDryRun and Failed (version mismatch)
+- in-memory only; no persistence, no network exposure, no IP/personal data
+- 8 unit tests
+
 ## Milestone 2.1
 
 Session event log / audit trail:
