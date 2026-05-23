@@ -167,6 +167,10 @@ async fn main() -> Result<()> {
         capabilities: vec![],
     };
     let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
+    println!(
+        "Local Capabilities: {}",
+        format_capabilities(&current_protocol_profile().capabilities)
+    );
     println!("Protocol Negotiation (dry-run): {:?}", negotiation.status);
     println!("  Selected Version: {:?}", negotiation.selected_version);
     println!(
@@ -738,6 +742,10 @@ fn print_protocol_negotiation_dry_run() -> Result<()> {
     };
     let result = negotiate_protocol_dry_run(&client_profile, &server_profile);
 
+    println!(
+        "Local Capabilities: {}",
+        format_capabilities(&current_protocol_profile().capabilities)
+    );
     println!("Protocol Negotiation (dry-run): {:?}", result.status);
     println!("  Selected Version: {:?}", result.selected_version);
     println!(

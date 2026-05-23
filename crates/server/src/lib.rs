@@ -3,11 +3,12 @@ use std::{collections::HashMap, env, sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use protocol::{
     AnnouncedResource, AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState,
-    JoinGateDecision, JoinGateOutcome, PROTOCOL_VERSION, Position, ProtocolCompatibilityProfile,
-    ProtocolNegotiationStatus, ProtocolVersionRange, ResourceAnnouncement, ResourceJoinDecision,
-    ResourcePolicyEvaluation, ResourceRequirementLevel, ServerMessage, build_join_gate_decision,
-    current_protocol_profile, decode_client_line, encode_line, evaluate_resource_policy,
-    negotiate_protocol_dry_run,
+    JoinGateDecision, JoinGateOutcome, PROTOCOL_VERSION, Position, ProtocolCapability,
+    ProtocolCompatibilityProfile, ProtocolNegotiationStatus, ProtocolVersionRange,
+    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation, ResourceRequirementLevel,
+    ServerMessage, build_join_gate_decision, capability_gate_report, current_protocol_profile,
+    decode_client_line, encode_line, evaluate_resource_policy, negotiate_protocol_dry_run,
+    shared_capabilities,
 };
 use resource_manifest::build_pack_index;
 use serde::Deserialize;
@@ -65,6 +66,7 @@ struct ClientInfo {
     name: String,
     entity_id: u32,
     last_announcement: Option<ResourceAnnouncement>,
+    shared_caps: Vec<ProtocolCapability>,
 }
 
 #[derive(Default)]
@@ -159,7 +161,7 @@ async fn handle_client(
     let mut lines = BufReader::new(reader_half).lines();
     let mut rx = tx.subscribe();
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ServerMessage>();
-    let name = match lines.next_line().await? {
+    let (name, shared_caps) = match lines.next_line().await? {
         Some(line) => match decode_client_line(&line)? {
             ClientMessage::Login {
                 name,
@@ -188,10 +190,12 @@ async fn handle_client(
                     capabilities: Vec::new(),
                 };
                 let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
+                let caps = shared_capabilities(&client_profile, &server_profile);
                 info!(
                     client_version = protocol_version,
                     server_version = PROTOCOL_VERSION,
                     negotiation_status = ?negotiation.status,
+                    shared_capability_count = caps.len(),
                     "protocol handshake: exact-match policy active, negotiation dry-run computed"
                 );
                 if negotiation.status != ProtocolNegotiationStatus::ExactMatch {
@@ -203,7 +207,7 @@ async fn handle_client(
                     );
                 }
 
-                name
+                (name, caps)
             }
             _ => {
                 send_direct(
@@ -226,6 +230,7 @@ async fn handle_client(
             name: name.clone(),
             entity_id,
             last_announcement: build_example_resource_announcement(),
+            shared_caps: shared_caps.clone(),
         },
     );
 
@@ -246,6 +251,14 @@ async fn handle_client(
         .get(&client_id)
         .and_then(|client| client.last_announcement.clone())
     {
+        let gate = capability_gate_report(ProtocolCapability::ResourceAnnouncement, &shared_caps);
+        info!(
+            %client_id,
+            capability = "ResourceAnnouncement",
+            supported = gate.supported,
+            reason = %gate.reason,
+            "capability gate check: resource announcement (dry-run, report-only)"
+        );
         send_direct(
             &mut writer_half,
             &ServerMessage::ResourceAnnouncement(announcement),
@@ -307,17 +320,25 @@ async fn handle_client(
                 let _ = tx.send(ServerMessage::ChatBroadcast { from, message });
             }
             ClientMessage::ResourceAvailabilityReport(report) => {
-                let announcement = state
-                    .clients
-                    .read()
-                    .await
-                    .get(&client_id)
-                    .and_then(|client| client.last_announcement.clone());
+                let client_data = {
+                    let clients = state.clients.read().await;
+                    clients
+                        .get(&client_id)
+                        .map(|c| (c.last_announcement.clone(), c.shared_caps.clone()))
+                };
 
-                if let Some(announcement) = announcement {
+                if let Some((Some(announcement), caps)) = client_data {
                     let evaluation = evaluate_resource_policy(&announcement, &report);
                     log_resource_policy_evaluation(client_id, &evaluation);
                     let decision = build_join_gate_decision(evaluation);
+                    let gate = capability_gate_report(ProtocolCapability::JoinGateDryRun, &caps);
+                    info!(
+                        %client_id,
+                        capability = "JoinGateDryRun",
+                        supported = gate.supported,
+                        reason = %gate.reason,
+                        "capability gate check: join gate decision (dry-run, report-only)"
+                    );
                     log_join_gate_decision(client_id, &decision);
                     let _ = client_tx.send(ServerMessage::JoinGateDecision(decision));
                 } else {
