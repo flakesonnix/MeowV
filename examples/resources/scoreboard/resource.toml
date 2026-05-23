@@ -1,12 +1,15 @@
-name = "chat"
+name = "scoreboard"
 version = "0.1.0"
-description = "Standalone chat example resource"
+description = "Standalone scoreboard example resource"
 authors = ["MeowV Team"]
 license = "MIT"
-tags = ["chat", "example"]
+tags = ["scoreboard", "example"]
 protocol_version = 1
 edition_compatibility = "any"
 
 [entrypoints]
 server = "server/main.js"
 client = "client/main.js"
+
+[[dependencies]]
+name = "chat"

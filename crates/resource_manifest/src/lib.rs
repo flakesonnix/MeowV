@@ -1,4 +1,5 @@
 use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -8,6 +9,7 @@ use anyhow::{Context, Result};
 use protocol::PROTOCOL_VERSION;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,7 +22,9 @@ pub enum EditionCompatibility {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ResourceEntrypoints {
+    #[serde(default)]
     pub server: Option<String>,
+    #[serde(default)]
     pub client: Option<String>,
 }
 
@@ -33,11 +37,16 @@ pub struct ResourceDependency {
 pub struct ResourceManifest {
     pub name: String,
     pub version: String,
+    #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub authors: Vec<String>,
+    #[serde(default)]
     pub license: Option<String>,
     pub entrypoints: ResourceEntrypoints,
+    #[serde(default)]
     pub dependencies: Vec<ResourceDependency>,
+    #[serde(default)]
     pub tags: Vec<String>,
     pub protocol_version: u32,
     pub edition_compatibility: EditionCompatibility,
@@ -83,6 +92,65 @@ pub struct CacheVerificationReport {
     pub size_mismatch_count: usize,
     pub hash_mismatch_count: usize,
     pub is_fully_valid: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredResource {
+    pub name: String,
+    pub root_dir: PathBuf,
+    pub manifest: ResourceManifest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceRegistry {
+    pub resources: BTreeMap<String, RegisteredResource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyResolutionError {
+    MissingDependency {
+        resource: String,
+        dependency: String,
+    },
+    DependencyCycle {
+        resources: Vec<String>,
+    },
+    DuplicateResource {
+        name: String,
+    },
+    InvalidResource {
+        path: PathBuf,
+        reason: String,
+    },
+}
+
+impl fmt::Display for DependencyResolutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingDependency {
+                resource,
+                dependency,
+            } => write!(
+                f,
+                "MissingDependency: resource '{}' depends on missing '{}'",
+                resource, dependency
+            ),
+            Self::DependencyCycle { resources } => {
+                write!(f, "DependencyCycle: {}", resources.join(", "))
+            }
+            Self::DuplicateResource { name } => {
+                write!(f, "DuplicateResource: '{}'", name)
+            }
+            Self::InvalidResource { path, reason } => {
+                write!(f, "InvalidResource: {} ({})", path.display(), reason)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadOrder {
+    pub resources: Vec<String>,
 }
 
 pub fn load_manifest_from_path(path: impl AsRef<Path>) -> Result<ResourceManifest> {
@@ -252,6 +320,170 @@ pub fn verify_cache_for_resource(
 ) -> Result<CacheVerificationReport> {
     let index = build_pack_index(resource_dir)?;
     verify_cache_against_index(&index, cache_dir)
+}
+
+pub fn discover_resources(root_dir: impl AsRef<Path>) -> Result<ResourceRegistry> {
+    let root_dir = root_dir.as_ref();
+    let mut resources = BTreeMap::new();
+
+    for entry in fs::read_dir(root_dir)
+        .with_context(|| format!("failed to read resources root: {}", root_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).with_context(|| {
+            format!(
+                "failed to read resource candidate metadata: {}",
+                path.display()
+            )
+        })?;
+
+        anyhow::ensure!(
+            !metadata.file_type().is_symlink(),
+            "symlinks are not supported in resource discovery"
+        );
+
+        if !metadata.is_dir() {
+            continue;
+        }
+
+        let manifest_path = path.join("resource.toml");
+        if !manifest_path.is_file() {
+            continue;
+        }
+
+        let manifest = load_manifest_from_path(&manifest_path).map_err(|err| {
+            anyhow::anyhow!(DependencyResolutionError::InvalidResource {
+                path: path.clone(),
+                reason: err.to_string(),
+            })
+        })?;
+
+        let folder_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!(DependencyResolutionError::InvalidResource {
+                    path: path.clone(),
+                    reason: "resource folder name is not valid UTF-8".to_string(),
+                })
+            })?;
+
+        if manifest.name != folder_name {
+            return Err(anyhow::anyhow!(
+                DependencyResolutionError::InvalidResource {
+                    path: path.clone(),
+                    reason: format!(
+                        "resource folder name '{}' does not match manifest name '{}'",
+                        folder_name, manifest.name
+                    ),
+                }
+            ));
+        }
+
+        insert_registered_resource(&mut resources, path, manifest)?;
+    }
+
+    Ok(ResourceRegistry { resources })
+}
+
+pub fn resolve_load_order(registry: &ResourceRegistry) -> Result<LoadOrder> {
+    validate_registry(registry)?;
+
+    let mut indegree: BTreeMap<String, usize> = registry
+        .resources
+        .keys()
+        .map(|name| (name.clone(), 0_usize))
+        .collect();
+    let mut dependents: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for (name, resource) in &registry.resources {
+        for dependency in &resource.manifest.dependencies {
+            *indegree.get_mut(name).expect("resource must exist") += 1;
+            dependents
+                .entry(dependency.name.clone())
+                .or_default()
+                .insert(name.clone());
+        }
+    }
+
+    let mut ready: VecDeque<String> = indegree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut ordered = Vec::with_capacity(registry.resources.len());
+
+    while let Some(name) = ready.pop_front() {
+        ordered.push(name.clone());
+
+        if let Some(children) = dependents.get(&name) {
+            for child in children {
+                let degree = indegree.get_mut(child).expect("dependent must exist");
+                *degree -= 1;
+                if *degree == 0 {
+                    ready.push_back(child.clone());
+                }
+            }
+        }
+    }
+
+    if ordered.len() != registry.resources.len() {
+        let cycle_resources = indegree
+            .into_iter()
+            .filter(|(_, degree)| *degree > 0)
+            .map(|(name, _)| name)
+            .collect();
+        return Err(anyhow::anyhow!(
+            DependencyResolutionError::DependencyCycle {
+                resources: cycle_resources,
+            }
+        ));
+    }
+
+    Ok(LoadOrder { resources: ordered })
+}
+
+pub fn validate_registry(registry: &ResourceRegistry) -> Result<()> {
+    for (name, resource) in &registry.resources {
+        for dependency in &resource.manifest.dependencies {
+            if !registry.resources.contains_key(&dependency.name) {
+                return Err(anyhow::anyhow!(
+                    DependencyResolutionError::MissingDependency {
+                        resource: name.clone(),
+                        dependency: dependency.name.clone(),
+                    }
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn insert_registered_resource(
+    resources: &mut BTreeMap<String, RegisteredResource>,
+    root_dir: PathBuf,
+    manifest: ResourceManifest,
+) -> Result<()> {
+    if resources.contains_key(&manifest.name) {
+        return Err(anyhow::anyhow!(
+            DependencyResolutionError::DuplicateResource {
+                name: manifest.name.clone(),
+            }
+        ));
+    }
+
+    resources.insert(
+        manifest.name.clone(),
+        RegisteredResource {
+            name: manifest.name.clone(),
+            root_dir,
+            manifest,
+        },
+    );
+
+    Ok(())
 }
 
 pub fn validate_resource_file_path(path: &Path) -> Result<()> {
@@ -702,6 +934,104 @@ mod tests {
         assert!(!report.is_fully_valid);
     }
 
+    #[test]
+    fn discover_multiple_valid_resources() {
+        let root = create_registry_root(&[
+            ("chat", registry_manifest("chat", &[])),
+            ("scoreboard", registry_manifest("scoreboard", &["chat"])),
+            ("admin", registry_manifest("admin", &["chat", "scoreboard"])),
+        ]);
+
+        let registry = discover_resources(&root).unwrap();
+        assert_eq!(registry.resources.len(), 3);
+        assert!(registry.resources.contains_key("chat"));
+        assert!(registry.resources.contains_key("scoreboard"));
+        assert!(registry.resources.contains_key("admin"));
+    }
+
+    #[test]
+    fn deterministic_load_order() {
+        let root = create_registry_root(&[
+            ("chat", registry_manifest("chat", &[])),
+            ("scoreboard", registry_manifest("scoreboard", &["chat"])),
+            ("admin", registry_manifest("admin", &["chat", "scoreboard"])),
+        ]);
+
+        let registry = discover_resources(&root).unwrap();
+        let order = resolve_load_order(&registry).unwrap();
+        assert_eq!(order.resources, vec!["chat", "scoreboard", "admin"]);
+    }
+
+    #[test]
+    fn missing_dependency_returns_error() {
+        let root = create_registry_root(&[("chat", registry_manifest("chat", &["missing_dep"]))]);
+
+        let registry = discover_resources(&root).unwrap();
+        let err = resolve_load_order(&registry).unwrap_err();
+        assert!(err.to_string().contains("MissingDependency"));
+    }
+
+    #[test]
+    fn dependency_cycle_returns_error() {
+        let root = create_registry_root(&[
+            ("chat", registry_manifest("chat", &["scoreboard"])),
+            ("scoreboard", registry_manifest("scoreboard", &["chat"])),
+        ]);
+
+        let registry = discover_resources(&root).unwrap();
+        let err = resolve_load_order(&registry).unwrap_err();
+        assert!(err.to_string().contains("DependencyCycle"));
+    }
+
+    #[test]
+    fn duplicate_resource_name_returns_error_if_possible() {
+        let mut resources = BTreeMap::new();
+        let manifest = parse_manifest_toml(&registry_manifest("chat", &[])).unwrap();
+
+        insert_registered_resource(&mut resources, PathBuf::from("/tmp/chat"), manifest.clone())
+            .unwrap();
+        let err =
+            insert_registered_resource(&mut resources, PathBuf::from("/tmp/chat-dup"), manifest)
+                .unwrap_err();
+        assert!(err.to_string().contains("DuplicateResource"));
+    }
+
+    #[test]
+    fn resource_directory_without_manifest_is_ignored() {
+        let root = unique_temp_dir("ignore-missing-manifest");
+        fs::create_dir_all(root.join("chat")).unwrap();
+        fs::write(
+            root.join("chat/resource.toml"),
+            registry_manifest("chat", &[]),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("empty_folder")).unwrap();
+
+        let registry = discover_resources(&root).unwrap();
+        assert_eq!(registry.resources.len(), 1);
+        assert!(registry.resources.contains_key("chat"));
+    }
+
+    #[test]
+    fn resource_folder_name_and_manifest_name_mismatch_returns_error() {
+        let root = create_registry_root(&[("chat_folder", registry_manifest("chat", &[]))]);
+
+        let err = discover_resources(&root).unwrap_err();
+        assert!(err.to_string().contains("does not match manifest name"));
+    }
+
+    #[test]
+    fn independent_resources_sorted_lexically() {
+        let root = create_registry_root(&[
+            ("zeta", registry_manifest("zeta", &[])),
+            ("alpha", registry_manifest("alpha", &[])),
+        ]);
+
+        let registry = discover_resources(&root).unwrap();
+        let order = resolve_load_order(&registry).unwrap();
+        assert_eq!(order.resources, vec!["alpha", "zeta"]);
+    }
+
     fn valid_manifest() -> &'static str {
         r#"name = "chat"
 version = "0.1.0"
@@ -775,5 +1105,29 @@ name = "core_ui"
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("meowv-{label}-{unique}"))
+    }
+
+    fn create_registry_root(resources: &[(&str, String)]) -> PathBuf {
+        let root = unique_temp_dir("resource-registry");
+        fs::create_dir_all(&root).unwrap();
+
+        for (dir_name, manifest) in resources {
+            let resource_dir = root.join(dir_name);
+            fs::create_dir_all(&resource_dir).unwrap();
+            fs::write(resource_dir.join("resource.toml"), manifest).unwrap();
+        }
+
+        root
+    }
+
+    fn registry_manifest(name: &str, dependencies: &[&str]) -> String {
+        let dependency_lines = dependencies
+            .iter()
+            .map(|dependency| format!("\n[[dependencies]]\nname = \"{dependency}\""))
+            .collect::<String>();
+
+        format!(
+            "name = \"{name}\"\nversion = \"0.1.0\"\ndescription = \"Registry test\"\nauthors = [\"MeowV Team\"]\nlicense = \"MIT\"\ntags = [\"test\"]\nprotocol_version = 1\nedition_compatibility = \"any\"\n\n[entrypoints]\nserver = \"server/main.js\"\nclient = \"client/main.js\"{dependency_lines}\n"
+        )
     }
 }
