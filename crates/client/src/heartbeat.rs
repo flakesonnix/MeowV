@@ -18,15 +18,24 @@ pub async fn send_ping_and_wait(
     reader: &mut Lines<BufReader<OwnedReadHalf>>,
     sequence: u64,
 ) -> Result<()> {
+    send_ping_and_wait_with_timeout(writer, reader, sequence, Duration::from_secs(2)).await
+}
+
+/// Variant that allows a custom timeout duration. Useful for tests.
+pub async fn send_ping_and_wait_with_timeout(
+    mut writer: &mut OwnedWriteHalf,
+    reader: &mut Lines<BufReader<OwnedReadHalf>>,
+    sequence: u64,
+    timeout_dur: Duration,
+) -> Result<()> {
     // Send Ping
     writer
         .write_all(encode_line(&ClientMessage::Ping { sequence })?.as_bytes())
         .await?;
 
-    // Wait for matching Pong within 2s
-    let deadline = Duration::from_secs(2);
+    // Wait for matching Pong within timeout_dur
     loop {
-        let line = timeout(deadline, reader.next_line()).await??.expect("stream closed");
+        let line = timeout(timeout_dur, reader.next_line()).await??.expect("stream closed");
         let packet = decode_server_line(&line)?;
         match packet {
             ServerMessage::Pong { sequence: got } if got == sequence => return Ok(()),

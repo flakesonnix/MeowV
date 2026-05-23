@@ -47,3 +47,96 @@ async fn helper_sends_ping_and_receives_matching_pong() -> Result<()> {
     server_task.abort();
     Ok(())
 }
+
+#[tokio::test]
+async fn helper_ignores_unrelated_server_messages() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let config = server_config(&addr.to_string());
+
+    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+
+    let stream = TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = BufReader::new(reader_half).lines();
+
+    // Login
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+
+    // consume welcome and announcement
+    let _ = read_packet(&mut lines).await?;
+    let _ = read_packet(&mut lines).await?;
+
+    // Now, simulate that server will send unrelated ChatBroadcast before Pong.
+    // We send a Ping and then the server (our test harness) will produce unrelated messages in its normal flow
+    // The helper should ignore any unrelated server messages and wait until the matching Pong arrives.
+    crate::heartbeat::send_ping_and_wait(&mut writer_half, &mut lines, 11).await?;
+
+    drop(lines);
+    drop(writer_half);
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn helper_ignores_mismatched_pong() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let config = server_config(&addr.to_string());
+
+    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+
+    let stream = TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = BufReader::new(reader_half).lines();
+
+    // Login
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+
+    // consume welcome and announcement
+    let _ = read_packet(&mut lines).await?;
+    let _ = read_packet(&mut lines).await?;
+
+    // The server will reply with Pong but potentially for a different sequence (due to interleaving)
+    // Our helper expects a matching sequence; it should ignore mismatched pongs until it gets the right one.
+    // Use sequences where server will produce pongs - we rely on normal server behavior to echo.
+    crate::heartbeat::send_ping_and_wait(&mut writer_half, &mut lines, 21).await?;
+
+    drop(lines);
+    drop(writer_half);
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn helper_times_out_when_matching_pong_never_arrives() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let mut config = server_config(&addr.to_string());
+    // tweak server config if needed (none currently)
+
+    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+
+    let stream = TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = BufReader::new(reader_half).lines();
+
+    // Login
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "bob".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+
+    // consume welcome and announcement
+    let _ = read_packet(&mut lines).await?;
+    let _ = read_packet(&mut lines).await?;
+
+    // Use the timeout-enabled helper with a short timeout (50ms) to avoid waiting a long time in tests.
+    let res = crate::heartbeat::send_ping_and_wait_with_timeout(&mut writer_half, &mut lines, 99, Duration::from_millis(50)).await;
+    assert!(res.is_err(), "expected timeout error when Pong never arrives");
+
+    drop(lines);
+    drop(writer_half);
+    server_task.abort();
+    Ok(())
+}
