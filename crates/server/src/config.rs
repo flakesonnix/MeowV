@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 use anyhow::Context;
+use protocol::PROTOCOL_VERSION;
 use serde::Deserialize;
 
 /// Error from [`ServerConfig::validate`].
@@ -319,6 +320,49 @@ join gate enforcement is not yet supported"
         })?;
         Ok(())
     }
+
+    /// Deterministic multi-line summary of the server's lifecycle configuration.
+    /// Logged at startup. Contains no IP addresses, personal data, or timestamps.
+    pub fn to_lifecycle_summary_text(&self) -> String {
+        format!(
+            "server_name: {}\n\
+             bind_addr: {}\n\
+             protocol_version: {}\n\
+             exact_version_required: {}\n\
+             negotiation_dry_run: {}\n\
+             capability_gates_report_only: {}\n\
+             resource_announcement_dir: {}\n\
+             join_gate_mode: dry_run\n\
+             join_gate_enforcement: disabled\n\
+             diagnostics_print: {}\n\
+             diagnostics_format: {}\n\
+             admin_stdin: {}\n\
+             log_level: {}\n\
+             log_format: {}",
+            self.server.name,
+            self.server.bind_addr,
+            PROTOCOL_VERSION,
+            self.protocol.exact_version_required,
+            self.protocol.negotiation_dry_run,
+            self.protocol.capability_gates_report_only,
+            self.resources.announcement_resource_dir,
+            self.diagnostics.print_session_diagnostics,
+            match self.diagnostics.format {
+                DiagnosticsFormat::Text => "text",
+                DiagnosticsFormat::JsonStub => "json_stub",
+            },
+            if self.admin.local_stdin_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            self.logging.level.as_str(),
+            match self.logging.format {
+                LogFormat::Text => "text",
+                LogFormat::Json => "json",
+            },
+        )
+    }
 }
 
 #[cfg(test)]
@@ -559,5 +603,61 @@ tick_rate = 20
 "#;
         let cfg: ServerConfig = toml::from_str(toml).unwrap();
         assert!(!cfg.admin.local_stdin_enabled);
+    }
+
+    #[test]
+    fn lifecycle_summary_deterministic() {
+        let cfg = ServerConfig::default();
+        assert_eq!(
+            cfg.to_lifecycle_summary_text(),
+            cfg.to_lifecycle_summary_text()
+        );
+    }
+
+    #[test]
+    fn lifecycle_summary_includes_dry_run_policies() {
+        let text = ServerConfig::default().to_lifecycle_summary_text();
+        assert!(text.contains("exact_version_required: true"));
+        assert!(text.contains("negotiation_dry_run: true"));
+        assert!(text.contains("capability_gates_report_only: true"));
+        assert!(text.contains("join_gate_mode: dry_run"));
+        assert!(text.contains("join_gate_enforcement: disabled"));
+    }
+
+    #[test]
+    fn lifecycle_summary_includes_admin_logging_diagnostics() {
+        let text = ServerConfig::default().to_lifecycle_summary_text();
+        assert!(text.contains("admin_stdin: disabled"));
+        assert!(text.contains("log_level: info"));
+        assert!(text.contains("log_format: text"));
+        assert!(text.contains("diagnostics_print: true"));
+        assert!(text.contains("diagnostics_format: text"));
+    }
+
+    #[test]
+    fn lifecycle_summary_includes_server_identity() {
+        let text = ServerConfig::default().to_lifecycle_summary_text();
+        assert!(text.contains("server_name:"));
+        assert!(text.contains("bind_addr:"));
+        assert!(text.contains("protocol_version:"));
+    }
+
+    #[test]
+    fn lifecycle_summary_reflects_admin_enabled() {
+        let toml = r#"
+[admin]
+local_stdin_enabled = true
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        let text = cfg.to_lifecycle_summary_text();
+        assert!(text.contains("admin_stdin: enabled"));
+    }
+
+    #[test]
+    fn lifecycle_summary_no_ip_personal_data() {
+        let text = ServerConfig::default().to_lifecycle_summary_text();
+        assert!(!text.contains("client_ip"));
+        assert!(!text.contains("peer_addr"));
+        assert!(!text.contains("remote_addr"));
     }
 }

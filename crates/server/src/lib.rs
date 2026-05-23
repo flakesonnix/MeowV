@@ -93,6 +93,10 @@ pub async fn run(config: ServerConfig) -> Result<()> {
         name = %config.server.name,
         "server listening"
     );
+    info!(
+        "server lifecycle config:\n{}",
+        config.to_lifecycle_summary_text(),
+    );
     run_with_listener(listener, config).await
 }
 
