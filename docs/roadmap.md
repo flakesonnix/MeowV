@@ -37,6 +37,14 @@ Runtime boundary:
 - runtime separation prep
 - deterministic resource planning
 
+## Milestone 1.2
+
+Runtime state machine:
+
+- no-exec lifecycle simulation
+- deterministic resource states
+- dependency readiness checks
+
 ## Milestone 0.5
 
 Game edition layer:
