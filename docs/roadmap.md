@@ -45,6 +45,7 @@
 | 3.4 | Resource cache repair planning — report-only, no downloads, no mutation |
 | 3.5 | Real signature verification design — design spec for announcement/resource index signature verification |
 | 3.6 | Signature metadata model — typed algorithm enum, structural validation, canonical payload |
+| 3.7 | Signature verification dry-run planner — deterministic plan/report from metadata + trust policy |
 
 ---
 
@@ -174,6 +175,20 @@ Signature metadata model:
 - 21 new protocol unit tests (60 total)
 - No crypto dependencies, no cryptographic verification, no base64 validation
 - `docs/signature-metadata-model.md` — new doc
+
+## Milestone 3.7
+
+Signature verification dry-run planner:
+
+- `TrustedKey` struct — key identity (key_id + algorithm), no crypto material
+- `SignatureVerificationAction` enum: `VerifySignature`, `MissingSignature`, `UnsupportedAlgorithm`, `UnknownKeyId`, `MalformedSignature`, `WouldRejectUnsigned`, `ResourceDigestMismatchPrecheck` — with `Display` impl
+- `SignatureVerificationPlanEntry` — per-resource entry with resource_name, action, reason
+- `SignatureVerificationPlan` — aggregate plan, `is_empty()`, `to_text()` (deterministic, sorted by resource name)
+- `build_signature_verification_plan(&ResourceAnnouncement, &[TrustedKey], reject_unsigned: bool) -> SignatureVerificationPlan` — pure function, no I/O, no crypto
+- Logic per resource: no signature → MissingSignature or WouldRejectUnsigned (by policy); metadata invalid → MalformedSignature; unsupported alg → UnsupportedAlgorithm; key_id untrusted → UnknownKeyId; all good → VerifySignature
+- 16 new protocol unit tests (76 total)
+- No crypto dependencies, no cryptographic verification, no downloads, no enforcement
+- `docs/signature-verification-dry-run.md` — new doc
 
 ---
 
