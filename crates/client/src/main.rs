@@ -12,9 +12,9 @@ use protocol::{
 use resource_manifest::{
     CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind, ResourceManifest,
     ResourceRuntimePhase, ResourceRuntimeState, ResourceRuntimeStateMachine,
-    build_load_plan_from_root, build_pack_index, default_compatibility_context, discover_resources,
-    evaluate_manifest_compatibility, load_manifest_from_path, resolve_load_order,
-    verify_cache_for_resource,
+    build_cache_repair_plan, build_load_plan_from_root, build_pack_index,
+    default_compatibility_context, discover_resources, evaluate_manifest_compatibility,
+    load_manifest_from_path, resolve_load_order, verify_cache_for_resource,
 };
 use serde::Deserialize;
 use server_browser::{LocalJsonServerListSource, ServerListSource, filter_current_protocol};
@@ -114,6 +114,11 @@ async fn main() -> Result<()> {
 
     if let Some((resource_dir, cache_dir)) = read_pair_flag(&args, "--verify-cache") {
         print_cache_verification(&resource_dir, &cache_dir)?;
+        return Ok(());
+    }
+
+    if let Some((resource_dir, cache_dir)) = read_pair_flag(&args, "--plan-cache-repair") {
+        print_cache_repair_plan(&resource_dir, &cache_dir)?;
         return Ok(());
     }
 
@@ -326,6 +331,17 @@ fn print_cache_verification(resource_dir: &str, cache_dir: &str) -> Result<()> {
         }
     );
 
+    Ok(())
+}
+
+fn print_cache_repair_plan(resource_dir: &str, cache_dir: &str) -> Result<()> {
+    let report = verify_cache_for_resource(resource_dir, cache_dir)?;
+    let plan = build_cache_repair_plan(&report);
+    println!("{}", plan.to_text());
+    if plan.is_noop() {
+        println!("Cache is fully valid, no repair needed.");
+    }
+    println!("No files were downloaded, modified, or executed.");
     Ok(())
 }
 

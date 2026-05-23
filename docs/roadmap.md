@@ -42,7 +42,7 @@
 | 3.1 | Server lifecycle config — summary text, startup logging, coverage |
 | 3.2 | Server lifecycle smoke test — config/runtime init, example config, no flaky networking |
 | 3.3 | Resource download design spec — threat model, protocol, staging, signatures |
-| 3.4 | Real signature verification — announcement signature checking |
+| 3.4 | Resource cache repair planning — report-only, no downloads, no mutation |
 | 3.5 | Minimal sandbox runtime design — no-exec design doc, no implementation |
 
 ---
@@ -106,6 +106,21 @@ Resource download design spec (docs-only):
 - Next recommended milestones shifted: M3.4 (cache repair plan), M3.5
   (signature verification), M3.6 (download DTOs), M3.7 (staging model)
 - No source code modified. No dependencies added. No network endpoints.
+
+## Milestone 3.4
+
+Resource cache repair planning (report-only):
+
+- `CacheRepairAction` enum: `None`, `FetchMissing`, `ReplaceInvalid`, `VerifyOnly`
+- `CacheRepairPlanEntry` — per-file entry with action derived from `CacheFileStatus`
+- `CacheRepairPlan` — aggregate plan with counts and `is_noop()` / `to_text()`
+- `build_cache_repair_plan(&CacheVerificationReport) -> CacheRepairPlan` — pure function, no I/O
+- Mapping: `Valid→None`, `Missing→FetchMissing`, `SizeMismatch/HashMismatch→ReplaceInvalid`
+- Client `--plan-cache-repair <resource_dir> <cache_dir>` — inspect-only CLI flag
+- 9 new unit tests: all-valid→noop, missing→FetchMissing, size mismatch→ReplaceInvalid, hash mismatch→ReplaceInvalid, mixed counts, deterministic ordering, text output, fully valid text, no filesystem access
+- No downloads, no file writes, no execution, no network access
+- `docs/resource-cache-repair-plan.md`
+- All existing boundaries preserved
 
 ---
 

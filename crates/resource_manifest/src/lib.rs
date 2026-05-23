@@ -133,6 +133,102 @@ pub struct CacheVerificationReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheRepairAction {
+    None,
+    FetchMissing,
+    ReplaceInvalid,
+    VerifyOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheRepairPlanEntry {
+    pub relative_path: PathBuf,
+    pub expected_size_bytes: u64,
+    pub expected_sha256: String,
+    pub action: CacheRepairAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheRepairPlan {
+    pub entries: Vec<CacheRepairPlanEntry>,
+    pub fetch_missing_count: usize,
+    pub replace_invalid_count: usize,
+    pub verify_only_count: usize,
+    pub noop_count: usize,
+}
+
+impl CacheRepairPlan {
+    pub fn is_noop(&self) -> bool {
+        self.fetch_missing_count == 0 && self.replace_invalid_count == 0
+    }
+
+    pub fn to_text(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "Cache Repair Plan: {} entries",
+            self.entries.len()
+        ));
+        lines.push(format!("  Fetch Missing: {}", self.fetch_missing_count));
+        lines.push(format!("  Replace Invalid: {}", self.replace_invalid_count));
+        lines.push(format!("  Verify Only: {}", self.verify_only_count));
+        lines.push(format!("  No Action: {}", self.noop_count));
+        for entry in &self.entries {
+            let action_label = match entry.action {
+                CacheRepairAction::None => "noop",
+                CacheRepairAction::FetchMissing => "fetch",
+                CacheRepairAction::ReplaceInvalid => "replace",
+                CacheRepairAction::VerifyOnly => "verify",
+            };
+            lines.push(format!(
+                "  {} -> {} ({} bytes, {})",
+                entry.relative_path.display(),
+                action_label,
+                entry.expected_size_bytes,
+                entry.expected_sha256,
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+pub fn build_cache_repair_plan(report: &CacheVerificationReport) -> CacheRepairPlan {
+    let mut entries = Vec::with_capacity(report.entries.len());
+    let mut fetch_missing_count = 0;
+    let mut replace_invalid_count = 0;
+    let mut verify_only_count = 0;
+    let mut noop_count = 0;
+
+    for entry in &report.entries {
+        let (action, inc_fetch, inc_replace, inc_verify, inc_noop) = match entry.status {
+            CacheFileStatus::Valid => (CacheRepairAction::None, 0, 0, 0, 1),
+            CacheFileStatus::Missing => (CacheRepairAction::FetchMissing, 1, 0, 0, 0),
+            CacheFileStatus::SizeMismatch => (CacheRepairAction::ReplaceInvalid, 0, 1, 0, 0),
+            CacheFileStatus::HashMismatch => (CacheRepairAction::ReplaceInvalid, 0, 1, 0, 0),
+        };
+
+        fetch_missing_count += inc_fetch;
+        replace_invalid_count += inc_replace;
+        verify_only_count += inc_verify;
+        noop_count += inc_noop;
+
+        entries.push(CacheRepairPlanEntry {
+            relative_path: entry.relative_path.clone(),
+            expected_size_bytes: entry.expected_size_bytes,
+            expected_sha256: entry.expected_sha256.clone(),
+            action,
+        });
+    }
+
+    CacheRepairPlan {
+        entries,
+        fetch_missing_count,
+        replace_invalid_count,
+        verify_only_count,
+        noop_count,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredResource {
     pub name: String,
     pub root_dir: PathBuf,
@@ -1357,6 +1453,187 @@ mod tests {
         let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
         assert_eq!(report.hash_mismatch_count, 1);
         assert!(!report.is_fully_valid);
+    }
+
+    #[test]
+    fn repair_plan_all_valid_is_noop() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "print('server')")],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-noop");
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let plan = build_cache_repair_plan(&report);
+        assert!(plan.is_noop());
+        assert_eq!(plan.noop_count, report.entries.len());
+        assert_eq!(plan.fetch_missing_count, 0);
+        assert_eq!(plan.replace_invalid_count, 0);
+        assert_eq!(plan.verify_only_count, 0);
+        for entry in &plan.entries {
+            assert_eq!(entry.action, CacheRepairAction::None);
+        }
+    }
+
+    #[test]
+    fn repair_plan_missing_is_fetch_missing() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("server/main.lua"), "print('server')"),
+                (&PathBuf::from("client/main.lua"), "print('client')"),
+            ],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-missing");
+        fs::remove_file(cache_dir.join("client/main.lua")).unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let plan = build_cache_repair_plan(&report);
+        assert!(!plan.is_noop());
+        assert_eq!(plan.fetch_missing_count, 1);
+        assert_eq!(plan.replace_invalid_count, 0);
+        let missing_entries: Vec<_> = plan
+            .entries
+            .iter()
+            .filter(|e| e.action == CacheRepairAction::FetchMissing)
+            .collect();
+        assert_eq!(missing_entries.len(), 1);
+        assert_eq!(missing_entries[0].relative_path, PathBuf::from("client/main.lua"));
+    }
+
+    #[test]
+    fn repair_plan_size_mismatch_is_replace_invalid() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "print('server')")],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-size");
+        fs::write(cache_dir.join("server/main.lua"), "xx").unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let plan = build_cache_repair_plan(&report);
+        assert!(!plan.is_noop());
+        assert_eq!(plan.replace_invalid_count, 1);
+        assert_eq!(plan.fetch_missing_count, 0);
+        let replace_entries: Vec<_> = plan
+            .entries
+            .iter()
+            .filter(|e| e.action == CacheRepairAction::ReplaceInvalid)
+            .collect();
+        assert_eq!(replace_entries.len(), 1);
+        assert_eq!(replace_entries[0].relative_path, PathBuf::from("server/main.lua"));
+    }
+
+    #[test]
+    fn repair_plan_hash_mismatch_is_replace_invalid() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "abc")],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-hash");
+        fs::write(cache_dir.join("server/main.lua"), "xyz").unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let plan = build_cache_repair_plan(&report);
+        assert!(!plan.is_noop());
+        assert_eq!(plan.replace_invalid_count, 1);
+        assert_eq!(plan.fetch_missing_count, 0);
+    }
+
+    #[test]
+    fn repair_plan_mixed_counts_are_correct() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("server/main.lua"), "abc"),
+                (&PathBuf::from("client/main.lua"), "print('client')"),
+            ],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-mixed");
+        fs::remove_file(cache_dir.join("client/main.lua")).unwrap();
+        fs::write(cache_dir.join("server/main.lua"), "zz").unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let plan = build_cache_repair_plan(&report);
+        assert!(!plan.is_noop());
+        assert_eq!(plan.fetch_missing_count, 1);
+        assert_eq!(plan.replace_invalid_count, 1);
+        assert_eq!(plan.noop_count, 1);
+    }
+
+    #[test]
+    fn repair_plan_deterministic_ordering() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("zeta.lua"), "z"),
+                (&PathBuf::from("alpha.lua"), "a"),
+            ],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-deterministic");
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let plan = build_cache_repair_plan(&report);
+        let paths: Vec<_> = plan
+            .entries
+            .iter()
+            .map(|entry| entry.relative_path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("alpha.lua"),
+                PathBuf::from("resource.toml"),
+                PathBuf::from("zeta.lua")
+            ]
+        );
+    }
+
+    #[test]
+    fn repair_plan_to_text_contains_counts_and_entries() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[
+                (&PathBuf::from("server/main.lua"), "abc"),
+                (&PathBuf::from("client/main.lua"), "print('client')"),
+            ],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-text");
+        fs::remove_file(cache_dir.join("client/main.lua")).unwrap();
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let plan = build_cache_repair_plan(&report);
+        let text = plan.to_text();
+        assert!(text.contains("Cache Repair Plan:"));
+        assert!(text.contains("Fetch Missing: 1"));
+        assert!(text.contains("client/main.lua"));
+        assert!(text.contains("fetch"));
+    }
+
+    #[test]
+    fn repair_plan_to_text_is_noop_when_fully_valid() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "print('server')")],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-text-noop");
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let plan = build_cache_repair_plan(&report);
+        assert!(plan.is_noop());
+        let text = plan.to_text();
+        assert!(text.contains("No Action:"));
+    }
+
+    #[test]
+    fn repair_plan_no_filesystem_access() {
+        let resource_dir = create_resource_dir(
+            valid_manifest(),
+            &[(&PathBuf::from("server/main.lua"), "print('server')")],
+        );
+        let cache_dir = clone_dir_contents(&resource_dir, "repair-nofs");
+
+        let report = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap();
+        let _plan = build_cache_repair_plan(&report);
     }
 
     #[cfg(unix)]
