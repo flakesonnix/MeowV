@@ -10,6 +10,8 @@ pub struct SessionDiagnostics {
     pub event_count: usize,
     pub events: Vec<SessionEvent>,
     pub last_event_message: Option<String>,
+    pub ping_received_count: usize,
+    pub pong_sent_count: usize,
     pub ready_dry_run: bool,
     pub failure_reason: Option<String>,
     pub enforcement_policy: Option<String>,
@@ -26,6 +28,8 @@ impl SessionDiagnostics {
             state_history: machine.history().to_vec(),
             event_count: log.len(),
             last_event_message: log.last().map(|e| e.message.clone()),
+            ping_received_count: log.count_kind(crate::event_log::SessionEventKind::PingReceived),
+            pong_sent_count: log.count_kind(crate::event_log::SessionEventKind::PongSent),
             events: log.events().to_vec(),
             current_state,
             enforcement_policy: None,
@@ -67,6 +71,8 @@ impl SessionDiagnostics {
         }
         out.push('\n');
         out.push_str(&format!("event_count: {}\n", self.event_count));
+        out.push_str(&format!("ping_received_count: {}\n", self.ping_received_count));
+        out.push_str(&format!("pong_sent_count: {}\n", self.pong_sent_count));
         for ev in &self.events {
             out.push_str(&format!(
                 "  [{}] {:?} @ {:?}: {}\n",
@@ -101,7 +107,7 @@ impl SessionDiagnostics {
         format!(
             "{{\"current_state\":\"{:?}\",\"ready_dry_run\":{},\"failure_reason\":{},\
 \"state_history\":[{}],\"event_count\":{},\"events\":[{}],\"last_event_message\":{},\
-\"enforcement_policy\":{},\"enforcement_decision\":{}}}",
+\"ping_received_count\":{},\"pong_sent_count\":{},\"enforcement_policy\":{},\"enforcement_decision\":{}}}",
             self.current_state,
             self.ready_dry_run,
             optional_json_string(self.failure_reason.as_deref()),
@@ -109,6 +115,8 @@ impl SessionDiagnostics {
             self.event_count,
             events.join(","),
             optional_json_string(self.last_event_message.as_deref()),
+            self.ping_received_count,
+            self.pong_sent_count,
             optional_json_string(self.enforcement_policy.as_deref()),
             optional_json_string(self.enforcement_decision.as_deref()),
         )
@@ -225,6 +233,8 @@ mod tests {
         assert!(diag.state_history.is_empty());
         assert!(diag.last_event_message.is_none());
         assert!(diag.failure_reason.is_none());
+        assert_eq!(diag.ping_received_count, 0);
+        assert_eq!(diag.pong_sent_count, 0);
     }
 
     #[test]
@@ -236,6 +246,30 @@ mod tests {
         assert!(diag.ready_dry_run);
         assert_eq!(diag.event_count, 11);
         assert!(diag.failure_reason.is_none());
+        assert_eq!(diag.ping_received_count, 0);
+        assert_eq!(diag.pong_sent_count, 0);
+    }
+
+    #[test]
+    fn diagnostics_includes_heartbeat_counts() {
+        let sm = SessionStateMachine::new();
+        let mut log = SessionEventLog::new();
+        log.record(
+            SessionEventKind::PingReceived,
+            SessionState::Connected,
+            "heartbeat: received ping 1",
+        );
+        log.record(
+            SessionEventKind::PongSent,
+            SessionState::Connected,
+            "heartbeat: sent pong 1",
+        );
+        let diag = SessionDiagnostics::from_parts(&sm, &log);
+        assert_eq!(diag.ping_received_count, 1);
+        assert_eq!(diag.pong_sent_count, 1);
+        let text = diag.to_text();
+        assert!(text.contains("ping_received_count: 1"));
+        assert!(text.contains("pong_sent_count: 1"));
     }
 
     #[test]

@@ -380,7 +380,7 @@ async fn main() -> Result<()> {
                 Duration::from_millis(timeout_ms),
                 stop_rx,
             )
-            .await;
+            .await
         });
 
         println!("heartbeat enabled; press Ctrl-C to stop");
@@ -393,7 +393,9 @@ async fn main() -> Result<()> {
 
         // request heartbeat stop and wait for the task to finish
         let _ = stop_tx.send(());
-        let _ = hb_handle.await;
+        if let Ok(metrics) = hb_handle.await {
+            println!("heartbeat summary:\n{}", metrics.to_text());
+        }
     }
     Ok(())
 }
