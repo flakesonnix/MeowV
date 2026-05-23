@@ -6,6 +6,7 @@ license = "MIT"
 tags = ["admin", "example"]
 protocol_version = 1
 edition_compatibility = "any"
+platform_compatibility = "any"
 
 [entrypoints]
 server = "server/main.js"

@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use game_edition::{detect_installed_game, GameEdition, GamePlatform};
 use protocol::PROTOCOL_VERSION;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -16,6 +17,15 @@ use std::fmt;
 pub enum EditionCompatibility {
     Legacy,
     Enhanced,
+    Any,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformCompatibility {
+    Windows,
+    Linux,
     Any,
     Unknown,
 }
@@ -50,6 +60,34 @@ pub struct ResourceManifest {
     pub tags: Vec<String>,
     pub protocol_version: u32,
     pub edition_compatibility: EditionCompatibility,
+    #[serde(default = "default_platform_compatibility")]
+    pub platform_compatibility: PlatformCompatibility,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompatibilityContext {
+    pub protocol_version: u32,
+    pub game_edition: GameEdition,
+    pub platform: GamePlatform,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompatibilityStatus {
+    Compatible,
+    Incompatible,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompatibilityIssue {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompatibilityReport {
+    pub status: CompatibilityStatus,
+    pub issues: Vec<CompatibilityIssue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -621,6 +659,95 @@ pub fn build_load_plan_from_root(root_dir: impl AsRef<Path>) -> Result<ResourceL
     build_load_plan(&registry, &load_order)
 }
 
+pub fn default_compatibility_context() -> CompatibilityContext {
+    let build_info = detect_installed_game();
+    CompatibilityContext {
+        protocol_version: PROTOCOL_VERSION,
+        game_edition: GameEdition::Unknown,
+        platform: build_info.platform,
+    }
+}
+
+pub fn is_protocol_compatible(expected: u32, actual: u32) -> bool {
+    expected == actual
+}
+
+pub fn evaluate_manifest_compatibility(
+    manifest: &ResourceManifest,
+    context: &CompatibilityContext,
+) -> CompatibilityReport {
+    let mut issues = Vec::new();
+
+    if !is_protocol_compatible(manifest.protocol_version, context.protocol_version) {
+        issues.push(CompatibilityIssue {
+            code: "protocol_mismatch".to_string(),
+            message: format!(
+                "resource protocol_version={} does not match context protocol_version={}",
+                manifest.protocol_version, context.protocol_version
+            ),
+        });
+    }
+
+    match (manifest.edition_compatibility.clone(), context.game_edition) {
+        (EditionCompatibility::Any, _) => {}
+        (EditionCompatibility::Legacy, GameEdition::Legacy) => {}
+        (EditionCompatibility::Enhanced, GameEdition::Enhanced) => {}
+        (EditionCompatibility::Unknown, GameEdition::Unknown) => issues.push(CompatibilityIssue {
+            code: "edition_unknown".to_string(),
+            message: "resource and context editions are both unknown".to_string(),
+        }),
+        (EditionCompatibility::Legacy, GameEdition::Unknown)
+        | (EditionCompatibility::Enhanced, GameEdition::Unknown)
+        | (EditionCompatibility::Unknown, GameEdition::Legacy)
+        | (EditionCompatibility::Unknown, GameEdition::Enhanced) => {
+            issues.push(CompatibilityIssue {
+                code: "edition_unknown".to_string(),
+                message: "edition compatibility cannot be confirmed with unknown edition context"
+                    .to_string(),
+            })
+        }
+        (EditionCompatibility::Legacy, GameEdition::Enhanced)
+        | (EditionCompatibility::Enhanced, GameEdition::Legacy) => {
+            issues.push(CompatibilityIssue {
+                code: "edition_mismatch".to_string(),
+                message: "resource edition compatibility does not match context edition"
+                    .to_string(),
+            })
+        }
+    }
+
+    match (manifest.platform_compatibility.clone(), context.platform) {
+        (PlatformCompatibility::Any, _) => {}
+        (PlatformCompatibility::Windows, GamePlatform::Windows) => {}
+        (PlatformCompatibility::Linux, GamePlatform::Linux) => {}
+        (PlatformCompatibility::Unknown, _) | (_, GamePlatform::Unknown) => {
+            issues.push(CompatibilityIssue {
+                code: "platform_unknown".to_string(),
+                message: "platform compatibility is not fully defined in this milestone"
+                    .to_string(),
+            })
+        }
+        (PlatformCompatibility::Windows, GamePlatform::Linux)
+        | (PlatformCompatibility::Linux, GamePlatform::Windows) => {
+            issues.push(CompatibilityIssue {
+                code: "platform_mismatch".to_string(),
+                message: "resource platform compatibility does not match context platform"
+                    .to_string(),
+            })
+        }
+    }
+
+    let status = if issues.iter().any(|issue| issue.code.ends_with("mismatch")) {
+        CompatibilityStatus::Incompatible
+    } else if issues.is_empty() {
+        CompatibilityStatus::Compatible
+    } else {
+        CompatibilityStatus::Unknown
+    };
+
+    CompatibilityReport { status, issues }
+}
+
 impl ResourceRuntimeStateMachine {
     pub fn from_load_plan(plan: &ResourceLoadPlan) -> Self {
         let order = plan
@@ -913,6 +1040,10 @@ fn is_valid_resource_name(name: &str) -> bool {
         && name
             .chars()
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
+}
+
+fn default_platform_compatibility() -> PlatformCompatibility {
+    PlatformCompatibility::Any
 }
 
 fn collect_files(
@@ -1650,6 +1781,146 @@ mod tests {
         );
     }
 
+    #[test]
+    fn exact_protocol_match_is_compatible() {
+        let manifest = parse_manifest_toml(valid_manifest()).unwrap();
+        let report = evaluate_manifest_compatibility(
+            &manifest,
+            &CompatibilityContext {
+                protocol_version: PROTOCOL_VERSION,
+                game_edition: GameEdition::Legacy,
+                platform: GamePlatform::Linux,
+            },
+        );
+        assert_eq!(report.status, CompatibilityStatus::Compatible);
+    }
+
+    #[test]
+    fn protocol_mismatch_is_incompatible() {
+        let manifest = parse_manifest_toml(valid_manifest()).unwrap();
+        let report = evaluate_manifest_compatibility(
+            &manifest,
+            &CompatibilityContext {
+                protocol_version: PROTOCOL_VERSION + 1,
+                game_edition: GameEdition::Legacy,
+                platform: GamePlatform::Linux,
+            },
+        );
+        assert_eq!(report.status, CompatibilityStatus::Incompatible);
+    }
+
+    #[test]
+    fn any_edition_matches_legacy_enhanced_unknown() {
+        let manifest = parse_manifest_toml(valid_manifest()).unwrap();
+        for edition in [
+            GameEdition::Legacy,
+            GameEdition::Enhanced,
+            GameEdition::Unknown,
+        ] {
+            let report = evaluate_manifest_compatibility(
+                &manifest,
+                &CompatibilityContext {
+                    protocol_version: PROTOCOL_VERSION,
+                    game_edition: edition,
+                    platform: GamePlatform::Linux,
+                },
+            );
+            if edition == GameEdition::Unknown {
+                assert_eq!(report.status, CompatibilityStatus::Compatible);
+            } else {
+                assert_eq!(report.status, CompatibilityStatus::Compatible);
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_resource_with_enhanced_context_is_incompatible() {
+        let manifest = parse_manifest_toml(&valid_manifest().replace(
+            "edition_compatibility = \"any\"",
+            "edition_compatibility = \"legacy\"",
+        ))
+        .unwrap();
+        let report = evaluate_manifest_compatibility(
+            &manifest,
+            &CompatibilityContext {
+                protocol_version: PROTOCOL_VERSION,
+                game_edition: GameEdition::Enhanced,
+                platform: GamePlatform::Linux,
+            },
+        );
+        assert_eq!(report.status, CompatibilityStatus::Incompatible);
+    }
+
+    #[test]
+    fn enhanced_resource_with_legacy_context_is_incompatible() {
+        let manifest = parse_manifest_toml(&valid_manifest().replace(
+            "edition_compatibility = \"any\"",
+            "edition_compatibility = \"enhanced\"",
+        ))
+        .unwrap();
+        let report = evaluate_manifest_compatibility(
+            &manifest,
+            &CompatibilityContext {
+                protocol_version: PROTOCOL_VERSION,
+                game_edition: GameEdition::Legacy,
+                platform: GamePlatform::Linux,
+            },
+        );
+        assert_eq!(report.status, CompatibilityStatus::Incompatible);
+    }
+
+    #[test]
+    fn unknown_edition_context_is_unknown_unless_resource_is_any() {
+        let manifest = parse_manifest_toml(&valid_manifest().replace(
+            "edition_compatibility = \"any\"",
+            "edition_compatibility = \"legacy\"",
+        ))
+        .unwrap();
+        let report = evaluate_manifest_compatibility(
+            &manifest,
+            &CompatibilityContext {
+                protocol_version: PROTOCOL_VERSION,
+                game_edition: GameEdition::Unknown,
+                platform: GamePlatform::Linux,
+            },
+        );
+        assert_eq!(report.status, CompatibilityStatus::Unknown);
+    }
+
+    #[test]
+    fn multiple_issues_collected_deterministically() {
+        let manifest = parse_manifest_toml(
+            &valid_manifest()
+                .replace(
+                    "edition_compatibility = \"any\"",
+                    "edition_compatibility = \"legacy\"",
+                )
+                .replace(
+                    "platform_compatibility = \"any\"",
+                    "platform_compatibility = \"windows\"",
+                ),
+        )
+        .unwrap();
+        let report = evaluate_manifest_compatibility(
+            &manifest,
+            &CompatibilityContext {
+                protocol_version: PROTOCOL_VERSION + 1,
+                game_edition: GameEdition::Enhanced,
+                platform: GamePlatform::Linux,
+            },
+        );
+        assert_eq!(report.status, CompatibilityStatus::Incompatible);
+        let codes = report
+            .issues
+            .into_iter()
+            .map(|issue| issue.code)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            vec!["protocol_mismatch", "edition_mismatch", "platform_mismatch"]
+        );
+    }
+
     fn valid_manifest() -> &'static str {
         r#"name = "chat"
 version = "0.1.0"
@@ -1659,6 +1930,7 @@ license = "MIT"
 tags = ["chat", "example"]
 protocol_version = 1
 edition_compatibility = "any"
+platform_compatibility = "any"
 
 [entrypoints]
 server = "server/main.js"
