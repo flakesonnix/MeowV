@@ -30,6 +30,22 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.4
+
+Structured logging / tracing config:
+
+- `LogLevel` enum (Trace/Debug/Info/Warn/Error), `LogFormat` enum (Text/Json),
+  `LoggingSection` in server config
+- `[logging]` section in `example.server.toml`
+- `init_logging(&LoggingSection)` — branches on format (text/json), applies
+  level and show_targets, uses `try_init()` to avoid double-init panics
+- `RUST_LOG` env var still takes precedence over config level
+- "logging initialized" info line emitted at startup
+- main.rs loads config before calling init_logging
+- Server already uses `info!/warn!/error!` throughout; no println! present
+- 6 new logging config unit tests (all levels parse, invalid level/format
+  rejected at parse time, default validates, JSON format parses)
+
 ## Milestone 2.3
 
 Server config for dry-run policies:
