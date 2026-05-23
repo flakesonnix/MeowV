@@ -40,7 +40,7 @@
 |---|---|
 | 3.0 | Architecture refresh — crate/module map, pipeline docs, security boundaries |
 | 3.1 | Server lifecycle config — summary text, startup logging, coverage |
-| 3.2 | Resource download design spec — protocol design doc only, no implementation |
+| 3.2 | Server lifecycle smoke test — config/runtime init, example config, no flaky networking |
 | 3.3 | Local resource cache repair — design-only, no network |
 | 3.4 | Real signature verification — announcement signature checking |
 | 3.5 | Minimal sandbox runtime design — no-exec design doc, no implementation |
@@ -61,6 +61,22 @@ Server lifecycle config cleanup:
   no IP/personal data)
 - All existing validation rules unchanged and still enforced
 - `docs/server-config.md` updated with lifecycle summary documentation
+
+## Milestone 3.2
+
+Server lifecycle smoke tests:
+
+- New `tests/smoke.rs` integration test file — 8 tests, no flaky networking,
+  no tokio runtime required
+- Tests: example config file validates, default config initializes lifecycle,
+  runtime status from config + empty registry, shutdown summary from default
+  lifecycle, admin stdin disabled by default, no remote admin fields,
+  lifecycle summary has no IP/personal data, dry-run policies reflected in
+  summary
+- `server` crate exports `ShutdownReason`, `ShutdownSummary`,
+  `build_shutdown_summary` for integration test use
+- All existing validation rules unchanged and still enforced
+- No downloads, execution, remote admin, persistence, or telemetry
 
 ---
 

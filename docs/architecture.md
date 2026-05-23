@@ -66,7 +66,7 @@ config-driven policy, and graceful shutdown. The largest crate.
 | `admin` | `AdminCommand` (6 variants), `parse_admin_command`, `handle_admin_command`, `handle_admin_command_with_context` |
 | `shutdown` | `ShutdownState`, `ShutdownReason`, `ShutdownSummary`, `build_shutdown_summary` |
 
-Tests: 116
+Tests: 130 (122 unit + 8 integration)
 
 ### `crates/client`
 
