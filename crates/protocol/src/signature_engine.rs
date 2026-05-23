@@ -57,6 +57,81 @@ pub struct TrustedPublicKey {
 }
 
 // ---------------------------------------------------------------------------
+// Key config validation (M4.1)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyConfigError {
+    EmptyConfig,
+    DuplicateKeyId { key_id: String },
+    UnsupportedAlgorithm { key_id: String, algorithm: String },
+    MalformedKeyMaterial {
+        key_id: String,
+        algorithm: String,
+        detail: String,
+    },
+}
+
+impl std::fmt::Display for KeyConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyConfig => write!(f, "trusted key config is empty"),
+            Self::DuplicateKeyId { key_id } => {
+                write!(f, "duplicate trusted key ID: '{key_id}'")
+            }
+            Self::UnsupportedAlgorithm {
+                key_id,
+                algorithm,
+            } => {
+                write!(
+                    f,
+                    "trusted key '{key_id}' has unsupported algorithm '{algorithm}'"
+                )
+            }
+            Self::MalformedKeyMaterial {
+                key_id,
+                algorithm,
+                detail,
+            } => {
+                write!(
+                    f,
+                    "trusted key '{key_id}' has invalid material for '{algorithm}': {detail}"
+                )
+            }
+        }
+    }
+}
+
+pub fn validate_trusted_key_config(keys: &[TrustedPublicKey]) -> Result<(), KeyConfigError> {
+    if keys.is_empty() {
+        return Err(KeyConfigError::EmptyConfig);
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    for key in keys {
+        if !seen.insert(&key.key_id) {
+            return Err(KeyConfigError::DuplicateKeyId {
+                key_id: key.key_id.clone(),
+            });
+        }
+        if key.algorithm != "ed25519" {
+            return Err(KeyConfigError::UnsupportedAlgorithm {
+                key_id: key.key_id.clone(),
+                algorithm: key.algorithm.clone(),
+            });
+        }
+        if key.algorithm == "ed25519" && key.public_key.len() != 32 {
+            return Err(KeyConfigError::MalformedKeyMaterial {
+                key_id: key.key_id.clone(),
+                algorithm: key.algorithm.clone(),
+                detail: format!("expected 32-byte key, got {} bytes", key.public_key.len()),
+            });
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Verification outcome and report
 // ---------------------------------------------------------------------------
 
@@ -242,7 +317,8 @@ pub fn verify_ed25519_signature(
 // Signature policy enforcement gate (M4.0)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SignaturePolicy {
     ReportOnly,
     Strict,
@@ -916,5 +992,92 @@ mod tests {
         };
         assert_eq!(v, v2);
         assert!(!format!("{v:?}").is_empty());
+    }
+
+    // -------------------------------------------------------------------
+    // Key config validation tests (M4.1)
+    // -------------------------------------------------------------------
+
+    fn make_valid_key(key_id: &str, seed: u8) -> TrustedPublicKey {
+        let secret = [seed; 32];
+        let sk = ed25519_dalek::SigningKey::from_bytes(&secret);
+        TrustedPublicKey {
+            key_id: key_id.to_string(),
+            algorithm: "ed25519".to_string(),
+            public_key: sk.verifying_key().to_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn key_config_valid_passes() {
+        let keys = vec![make_valid_key("a", 1), make_valid_key("b", 2)];
+        assert!(validate_trusted_key_config(&keys).is_ok());
+    }
+
+    #[test]
+    fn key_config_empty_rejected() {
+        let err = validate_trusted_key_config(&[]).unwrap_err();
+        assert_eq!(err, KeyConfigError::EmptyConfig);
+    }
+
+    #[test]
+    fn key_config_duplicate_key_id_rejected() {
+        let keys = vec![make_valid_key("dup", 1), make_valid_key("dup", 2)];
+        let err = validate_trusted_key_config(&keys).unwrap_err();
+        assert!(matches!(err, KeyConfigError::DuplicateKeyId { key_id } if key_id == "dup"));
+    }
+
+    #[test]
+    fn key_config_unsupported_algorithm_rejected() {
+        let keys = vec![TrustedPublicKey {
+            key_id: "bad".to_string(),
+            algorithm: "rsa".to_string(),
+            public_key: vec![0u8; 32],
+        }];
+        let err = validate_trusted_key_config(&keys).unwrap_err();
+        assert!(matches!(
+            err,
+            KeyConfigError::UnsupportedAlgorithm { key_id, algorithm }
+                if key_id == "bad" && algorithm == "rsa"
+        ));
+    }
+
+    #[test]
+    fn key_config_wrong_key_length_rejected() {
+        let keys = vec![TrustedPublicKey {
+            key_id: "short".to_string(),
+            algorithm: "ed25519".to_string(),
+            public_key: vec![0u8; 31],
+        }];
+        let err = validate_trusted_key_config(&keys).unwrap_err();
+        assert!(matches!(
+            err,
+            KeyConfigError::MalformedKeyMaterial { key_id, .. }
+                if key_id == "short"
+        ));
+    }
+
+    #[test]
+    fn key_config_error_display() {
+        let e = KeyConfigError::EmptyConfig;
+        assert!(e.to_string().contains("empty"));
+
+        let e = KeyConfigError::DuplicateKeyId {
+            key_id: "k".to_string(),
+        };
+        assert!(e.to_string().contains("duplicate"));
+
+        let e = KeyConfigError::UnsupportedAlgorithm {
+            key_id: "k".to_string(),
+            algorithm: "rsa".to_string(),
+        };
+        assert!(e.to_string().contains("unsupported"));
+
+        let e = KeyConfigError::MalformedKeyMaterial {
+            key_id: "k".to_string(),
+            algorithm: "ed25519".to_string(),
+            detail: "bad".to_string(),
+        };
+        assert!(e.to_string().contains("invalid material"));
     }
 }
