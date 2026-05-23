@@ -62,8 +62,7 @@ async fn cli_ping_once_timeout() -> Result<()> {
         }
     });
 
-    // Wait for server to be ready
-    let _ = ready_rx.await;
+    // don't await ready_rx here — server will signal readiness after accept; proceed to connect
 
     let stream = tokio::net::TcpStream::connect(addr).await?;
     let (reader_half, mut writer_half) = stream.into_split();
