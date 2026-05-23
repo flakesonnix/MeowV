@@ -41,7 +41,7 @@
 | 3.0 | Architecture refresh — crate/module map, pipeline docs, security boundaries |
 | 3.1 | Server lifecycle config — summary text, startup logging, coverage |
 | 3.2 | Server lifecycle smoke test — config/runtime init, example config, no flaky networking |
-| 3.3 | Local resource cache repair — design-only, no network |
+| 3.3 | Resource download design spec — threat model, protocol, staging, signatures |
 | 3.4 | Real signature verification — announcement signature checking |
 | 3.5 | Minimal sandbox runtime design — no-exec design doc, no implementation |
 
@@ -77,6 +77,35 @@ Server lifecycle smoke tests:
   `build_shutdown_summary` for integration test use
 - All existing validation rules unchanged and still enforced
 - No downloads, execution, remote admin, persistence, or telemetry
+
+## Milestone 3.3
+
+Resource download design spec (docs-only):
+
+- `docs/resource-download-design.md` — comprehensive design specification
+- Scope: future download and cache repair, no current implementation
+- Threat model: malicious server, corrupted cache, partial downloads, path
+  traversal, symlink attacks, hash mismatch, replay, unsigned announcements,
+  archive risks
+- Allowed future behaviour: staged downloads, verify-before-commit, no
+  execution, explicit cache repair only
+- Disallowed behaviour: no auto-execution, no system-path writes, no symlink
+  following, no unsigned enforcement, no GTA integration
+- Proposed future DTOs: `ResourceDownloadRequest`, `ResourceDownloadOffer`,
+  `ResourceFileChunk`, `ResourceDownloadComplete`, `ResourceDownloadError`
+  (design only, not implemented)
+- Staging/cache model: staging dir, `.partial` naming, atomic rename,
+  verify-before-commit, cleanup on failure, deterministic layout
+- Signature relationship: downloads require signed announcements; signature
+  enforcement gated behind its own milestone
+- Join gate relationship: remains dry-run until download/repair/signature
+  model is mature
+- 8 open questions documented (chunk size, compression, archive support,
+  retry policy, signed index format, trust roots, cache eviction, offline
+  mode)
+- Next recommended milestones shifted: M3.4 (cache repair plan), M3.5
+  (signature verification), M3.6 (download DTOs), M3.7 (staging model)
+- No source code modified. No dependencies added. No network endpoints.
 
 ---
 

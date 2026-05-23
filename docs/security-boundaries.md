@@ -25,7 +25,8 @@ planned milestones.
 - No remote command execution.
 
 ### No Downloads or Execution
-- No file downloads (even in future design, downloads are spec-only).
+- No file downloads. A design specification exists at
+  `docs/resource-download-design.md`, but no download logic is implemented.
 - No file serving.
 - No script execution (Lua, JS, WASM, or custom bytecode).
 - No scripting runtime.
@@ -92,3 +93,5 @@ These checks are a hard error at startup and cannot be bypassed at runtime.
 - `docs/legal-boundaries.md` — legal/compliance boundaries (proprietary code,
   clean-room requirements, risk notes).
 - `docs/architecture.md` — crate/module map, pipelines, dry-run policies.
+- `docs/resource-download-design.md` — design specification for future
+  download and cache repair (spec only, no implementation).

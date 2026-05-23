@@ -141,6 +141,10 @@ runtime state machine (no-exec: Planned→Validated→Ready→Started→Stopped)
 compatibility check (edition, protocol version)
 ```
 
+A future download/repair stage would sit between cache verification and the
+resource registry. See `docs/resource-download-design.md` for the design
+specification. No download logic is implemented in the current milestone.
+
 ## Server Handshake Pipeline
 
 ```
@@ -214,16 +218,14 @@ accept loop stops → build ShutdownSummary → log → return
 
 ## Next Recommended Milestones
 
-- **3.1**: Server lifecycle config cleanup — consolidate startup/shutdown CLI
-  flags, validate config sections more strictly.
-- **3.2**: Resource download design spec — document the future download
-  protocol as a design document only. No implementation.
-- **3.3**: Local resource cache repair plan — design a cache-repair flow that
-  uses only local data. No network.
-- **3.4**: Real signature verification — implement or design announcement
-  signature verification for resource authenticity.
-- **3.5**: Minimal sandbox runtime design — document a no-exec runtime
-  architecture for future script sandboxing. No implementation.
+- **M3.4**: Local resource cache repair plan — design a cache-repair flow that
+  uses only local data. No network. No downloads.
+- **M3.5**: Real signature verification design — design or implement
+  announcement signature verification for resource authenticity.
+- **M3.6**: Download protocol DTOs only — add download message types to the
+  protocol crate. No transfer logic.
+- **M3.7**: Staging directory model — implement staging directory creation,
+  cleanup, and deterministic cache layout. Local-only. No downloads.
 
 ## Hard Boundaries
 
