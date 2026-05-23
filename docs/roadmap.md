@@ -38,7 +38,7 @@
 
 | MS | Title |
 |---|---|
-| 3.0 | Architecture refresh — crate/module map, pipeline docs, security boundaries |
+| 3.0 | Session enforcement dry-run — policy model, decision types, report-only planner |
 | 3.1 | Server lifecycle config — summary text, startup logging, coverage |
 | 3.2 | Server lifecycle smoke test — config/runtime init, example config, no flaky networking |
 | 3.3 | Resource download design spec — threat model, protocol, staging, signatures |
@@ -52,6 +52,24 @@
 | 4.1 | Trust key UX + policy validation — `KeyConfigError`, validate config, strict requires keys, key summary |
 
 ---
+
+## Milestone 3.0
+
+Session enforcement dry-run:
+
+- New `crates/server/src/enforcement.rs` — `SessionEnforcementPolicy` (ReportOnly, Strict),
+  `SessionEnforcementDecision` (Allow, WouldDisconnectInvalidFirstMessage,
+  WouldDisconnectVersionMismatch, WouldDisconnectCapabilityGateFailure,
+  WouldDisconnectInvalidStateTransition, WouldMarkSessionFailed),
+  `evaluate_enforcement()` pure function, `Decision::to_text()` display
+- 21 unit tests: report-only always allows, strict allows ReadyDryRun,
+  strict disconnects Connected/no-progress, strict disconnects version
+  mismatch, strict marks failed for generic failure or intermediate state,
+  deterministic text output, version extraction from reason string, policy
+  equality
+- No live behavior change — decisions are pure values, not executed
+- No protocol wire changes, no config changes, no new dependencies
+- `docs/session-enforcement-dry-run.md` — new doc
 
 ## Milestone 3.1
 
