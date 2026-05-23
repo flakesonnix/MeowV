@@ -187,6 +187,82 @@ pub struct ResourceLoadPlan {
     pub resources: Vec<PlannedResource>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceRuntimeState {
+    Planned,
+    Validated,
+    Ready,
+    Started,
+    Stopped,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceRuntimeStatus {
+    pub name: String,
+    pub state: ResourceRuntimeState,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceRuntimeStateMachine {
+    order: Vec<String>,
+    statuses: BTreeMap<String, ResourceRuntimeStatus>,
+    dependencies: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceRuntimeError {
+    UnknownResource {
+        name: String,
+    },
+    InvalidTransition {
+        name: String,
+        from: ResourceRuntimeState,
+        to: ResourceRuntimeState,
+    },
+    DependencyNotReady {
+        resource: String,
+        dependency: String,
+    },
+    ResourceFailed {
+        name: String,
+        message: Option<String>,
+    },
+}
+
+impl fmt::Display for ResourceRuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownResource { name } => write!(f, "UnknownResource: '{}'", name),
+            Self::InvalidTransition { name, from, to } => write!(
+                f,
+                "InvalidTransition: '{}' cannot move from {:?} to {:?}",
+                name, from, to
+            ),
+            Self::DependencyNotReady {
+                resource,
+                dependency,
+            } => write!(
+                f,
+                "DependencyNotReady: '{}' requires '{}' to be Ready or Started",
+                resource, dependency
+            ),
+            Self::ResourceFailed { name, message } => write!(
+                f,
+                "ResourceFailed: '{}'{}",
+                name,
+                message
+                    .as_deref()
+                    .map(|msg| format!(" ({msg})"))
+                    .unwrap_or_default()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ResourceRuntimeError {}
+
 pub fn load_manifest_from_path(path: impl AsRef<Path>) -> Result<ResourceManifest> {
     let path = path.as_ref();
     let raw = fs::read_to_string(path)
@@ -543,6 +619,209 @@ pub fn build_load_plan_from_root(root_dir: impl AsRef<Path>) -> Result<ResourceL
     let registry = discover_resources(root_dir)?;
     let load_order = resolve_load_order(&registry)?;
     build_load_plan(&registry, &load_order)
+}
+
+impl ResourceRuntimeStateMachine {
+    pub fn from_load_plan(plan: &ResourceLoadPlan) -> Self {
+        let order = plan
+            .resources
+            .iter()
+            .map(|resource| resource.name.clone())
+            .collect::<Vec<_>>();
+        let statuses = plan
+            .resources
+            .iter()
+            .map(|resource| {
+                (
+                    resource.name.clone(),
+                    ResourceRuntimeStatus {
+                        name: resource.name.clone(),
+                        state: ResourceRuntimeState::Planned,
+                        message: None,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let dependencies = plan
+            .resources
+            .iter()
+            .map(|resource| (resource.name.clone(), resource.dependencies.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        Self {
+            order,
+            statuses,
+            dependencies,
+        }
+    }
+
+    pub fn status(&self, resource_name: &str) -> Option<&ResourceRuntimeStatus> {
+        self.statuses.get(resource_name)
+    }
+
+    pub fn all_statuses(&self) -> Vec<ResourceRuntimeStatus> {
+        self.order
+            .iter()
+            .filter_map(|name| self.statuses.get(name).cloned())
+            .collect()
+    }
+
+    pub fn validate_resource(&mut self, resource_name: &str) -> Result<(), ResourceRuntimeError> {
+        self.transition(
+            resource_name,
+            ResourceRuntimeState::Planned,
+            ResourceRuntimeState::Validated,
+        )
+    }
+
+    pub fn mark_ready(&mut self, resource_name: &str) -> Result<(), ResourceRuntimeError> {
+        let current = self.current_state(resource_name)?;
+        match current {
+            ResourceRuntimeState::Validated => {
+                self.set_state(resource_name, ResourceRuntimeState::Ready, None)
+            }
+            ResourceRuntimeState::Stopped => {
+                self.set_state(resource_name, ResourceRuntimeState::Ready, None)
+            }
+            other => Err(ResourceRuntimeError::InvalidTransition {
+                name: resource_name.to_string(),
+                from: other,
+                to: ResourceRuntimeState::Ready,
+            }),
+        }
+    }
+
+    pub fn start_resource_no_exec(
+        &mut self,
+        resource_name: &str,
+    ) -> Result<(), ResourceRuntimeError> {
+        let current = self.current_state(resource_name)?;
+        if current == ResourceRuntimeState::Failed {
+            return Err(self.failed_error(resource_name)?);
+        }
+        if current != ResourceRuntimeState::Ready {
+            return Err(ResourceRuntimeError::InvalidTransition {
+                name: resource_name.to_string(),
+                from: current,
+                to: ResourceRuntimeState::Started,
+            });
+        }
+
+        for dependency in self
+            .dependencies
+            .get(resource_name)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let dep_state = self.current_state(&dependency)?;
+            if !matches!(
+                dep_state,
+                ResourceRuntimeState::Ready | ResourceRuntimeState::Started
+            ) {
+                return Err(ResourceRuntimeError::DependencyNotReady {
+                    resource: resource_name.to_string(),
+                    dependency,
+                });
+            }
+        }
+
+        self.set_state(resource_name, ResourceRuntimeState::Started, None)
+    }
+
+    pub fn stop_resource(&mut self, resource_name: &str) -> Result<(), ResourceRuntimeError> {
+        self.transition(
+            resource_name,
+            ResourceRuntimeState::Started,
+            ResourceRuntimeState::Stopped,
+        )
+    }
+
+    pub fn fail_resource(
+        &mut self,
+        resource_name: &str,
+        message: impl Into<String>,
+    ) -> Result<(), ResourceRuntimeError> {
+        let current = self.current_state(resource_name)?;
+        if matches!(
+            current,
+            ResourceRuntimeState::Stopped | ResourceRuntimeState::Failed
+        ) {
+            return Err(ResourceRuntimeError::InvalidTransition {
+                name: resource_name.to_string(),
+                from: current,
+                to: ResourceRuntimeState::Failed,
+            });
+        }
+
+        self.set_state(
+            resource_name,
+            ResourceRuntimeState::Failed,
+            Some(message.into()),
+        )
+    }
+
+    fn transition(
+        &mut self,
+        resource_name: &str,
+        from: ResourceRuntimeState,
+        to: ResourceRuntimeState,
+    ) -> Result<(), ResourceRuntimeError> {
+        let current = self.current_state(resource_name)?;
+        if current == ResourceRuntimeState::Failed {
+            return Err(self.failed_error(resource_name)?);
+        }
+        if current != from {
+            return Err(ResourceRuntimeError::InvalidTransition {
+                name: resource_name.to_string(),
+                from: current,
+                to,
+            });
+        }
+
+        self.set_state(resource_name, to, None)
+    }
+
+    fn current_state(
+        &self,
+        resource_name: &str,
+    ) -> Result<ResourceRuntimeState, ResourceRuntimeError> {
+        self.status(resource_name)
+            .map(|status| status.state.clone())
+            .ok_or_else(|| ResourceRuntimeError::UnknownResource {
+                name: resource_name.to_string(),
+            })
+    }
+
+    fn failed_error(
+        &self,
+        resource_name: &str,
+    ) -> Result<ResourceRuntimeError, ResourceRuntimeError> {
+        let status =
+            self.status(resource_name)
+                .ok_or_else(|| ResourceRuntimeError::UnknownResource {
+                    name: resource_name.to_string(),
+                })?;
+        Ok(ResourceRuntimeError::ResourceFailed {
+            name: resource_name.to_string(),
+            message: status.message.clone(),
+        })
+    }
+
+    fn set_state(
+        &mut self,
+        resource_name: &str,
+        state: ResourceRuntimeState,
+        message: Option<String>,
+    ) -> Result<(), ResourceRuntimeError> {
+        let status = self.statuses.get_mut(resource_name).ok_or_else(|| {
+            ResourceRuntimeError::UnknownResource {
+                name: resource_name.to_string(),
+            }
+        })?;
+        status.state = state;
+        status.message = message;
+        Ok(())
+    }
 }
 
 fn insert_registered_resource(
@@ -1219,6 +1498,155 @@ mod tests {
         assert_eq!(
             plan.resources[0].entrypoints[1].path,
             PathBuf::from("client/main.js")
+        );
+    }
+
+    #[test]
+    fn initial_state_is_planned() {
+        let plan = build_load_plan_from_root(create_registry_root(&[(
+            "chat",
+            registry_manifest("chat", &[]),
+        )]))
+        .unwrap();
+        let machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+        assert_eq!(
+            machine.status("chat").unwrap().state,
+            ResourceRuntimeState::Planned
+        );
+    }
+
+    #[test]
+    fn valid_transition_planned_validated_ready_started_stopped() {
+        let plan = build_load_plan_from_root(create_registry_root(&[(
+            "chat",
+            registry_manifest("chat", &[]),
+        )]))
+        .unwrap();
+        let mut machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+        machine.validate_resource("chat").unwrap();
+        machine.mark_ready("chat").unwrap();
+        machine.start_resource_no_exec("chat").unwrap();
+        machine.stop_resource("chat").unwrap();
+
+        assert_eq!(
+            machine.status("chat").unwrap().state,
+            ResourceRuntimeState::Stopped
+        );
+    }
+
+    #[test]
+    fn invalid_transition_is_rejected() {
+        let plan = build_load_plan_from_root(create_registry_root(&[(
+            "chat",
+            registry_manifest("chat", &[]),
+        )]))
+        .unwrap();
+        let mut machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+        let err = machine.start_resource_no_exec("chat").unwrap_err();
+        assert!(err.to_string().contains("InvalidTransition"));
+    }
+
+    #[test]
+    fn unknown_resource_returns_error() {
+        let plan = build_load_plan_from_root(create_registry_root(&[(
+            "chat",
+            registry_manifest("chat", &[]),
+        )]))
+        .unwrap();
+        let mut machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+        let err = machine.validate_resource("missing").unwrap_err();
+        assert!(err.to_string().contains("UnknownResource"));
+    }
+
+    #[test]
+    fn dependency_must_be_ready_or_started_before_dependent_resource_starts() {
+        let plan = build_load_plan_from_root(create_registry_root(&[
+            ("chat", registry_manifest("chat", &[])),
+            ("scoreboard", registry_manifest("scoreboard", &["chat"])),
+        ]))
+        .unwrap();
+        let mut machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+        machine.validate_resource("scoreboard").unwrap();
+        machine.mark_ready("scoreboard").unwrap();
+
+        let err = machine.start_resource_no_exec("scoreboard").unwrap_err();
+        assert!(err.to_string().contains("DependencyNotReady"));
+    }
+
+    #[test]
+    fn dependency_ordering_works_with_existing_examples() {
+        let plan = build_load_plan_from_root(create_registry_root(&[
+            ("chat", registry_manifest("chat", &[])),
+            ("scoreboard", registry_manifest("scoreboard", &["chat"])),
+            ("admin", registry_manifest("admin", &["chat", "scoreboard"])),
+        ]))
+        .unwrap();
+        let mut machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+        for name in ["chat", "scoreboard", "admin"] {
+            machine.validate_resource(name).unwrap();
+            machine.mark_ready(name).unwrap();
+            machine.start_resource_no_exec(name).unwrap();
+        }
+
+        assert_eq!(
+            machine.status("admin").unwrap().state,
+            ResourceRuntimeState::Started
+        );
+    }
+
+    #[test]
+    fn fail_resource_moves_resource_to_failed_with_message() {
+        let plan = build_load_plan_from_root(create_registry_root(&[(
+            "chat",
+            registry_manifest("chat", &[]),
+        )]))
+        .unwrap();
+        let mut machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+        machine.fail_resource("chat", "simulated failure").unwrap();
+        let status = machine.status("chat").unwrap();
+        assert_eq!(status.state, ResourceRuntimeState::Failed);
+        assert_eq!(status.message.as_deref(), Some("simulated failure"));
+    }
+
+    #[test]
+    fn deterministic_status_ordering() {
+        let plan = build_load_plan_from_root(create_registry_root(&[
+            ("zeta", registry_manifest("zeta", &[])),
+            ("alpha", registry_manifest("alpha", &[])),
+        ]))
+        .unwrap();
+        let machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+        let names: Vec<_> = machine
+            .all_statuses()
+            .into_iter()
+            .map(|status| status.name)
+            .collect();
+        assert_eq!(names, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn no_file_contents_are_read_or_executed_by_design_for_state_machine() {
+        let plan = build_load_plan_from_root(create_registry_root(&[(
+            "chat",
+            registry_manifest("chat", &[]),
+        )]))
+        .unwrap();
+        let mut machine = ResourceRuntimeStateMachine::from_load_plan(&plan);
+
+        machine.validate_resource("chat").unwrap();
+        machine.mark_ready("chat").unwrap();
+        machine.start_resource_no_exec("chat").unwrap();
+
+        assert_eq!(
+            machine.status("chat").unwrap().state,
+            ResourceRuntimeState::Started
         );
     }
 
