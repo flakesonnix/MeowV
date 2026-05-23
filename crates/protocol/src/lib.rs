@@ -812,6 +812,8 @@ pub fn build_signature_verification_plan(
     SignatureVerificationPlan { entries }
 }
 
+pub mod signature_engine;
+
 #[cfg(test)]
 mod tests {
     use super::*;
