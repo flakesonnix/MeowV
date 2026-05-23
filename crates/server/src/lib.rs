@@ -5,9 +5,9 @@ mod event_log;
 mod session;
 
 pub use config::{
-    ConfigError, DiagnosticsFormat, DiagnosticsSection, JoinGateConfigMode, JoinGateSection,
-    LogFormat, LogLevel, LoggingSection, ProtocolSection, ResourcesSection, ServerConfig,
-    ServerSection,
+    AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, JoinGateConfigMode,
+    JoinGateSection, LogFormat, LogLevel, LoggingSection, ProtocolSection, ResourcesSection,
+    ServerConfig, ServerSection,
 };
 
 use config::DiagnosticsFormat as Fmt;
@@ -30,7 +30,7 @@ use resource_manifest::build_pack_index;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    sync::{RwLock, broadcast, mpsc},
+    sync::{RwLock, broadcast, mpsc, oneshot},
     task::JoinHandle,
     time,
 };
@@ -67,6 +67,27 @@ pub async fn run_with_listener(listener: TcpListener, config: ServerConfig) -> R
 
     spawn_tick_loop(config.clone(), state.clone(), tx.clone());
 
+    if config.admin.local_stdin_enabled {
+        let (quit_tx, quit_rx) = oneshot::channel::<()>();
+        tokio::spawn(admin_stdin_loop(quit_tx));
+        tokio::select! {
+            result = accept_loop(&listener, state, tx, &config) => result,
+            _ = quit_rx => {
+                info!("server shutdown requested via admin command");
+                Ok(())
+            }
+        }
+    } else {
+        accept_loop(&listener, state, tx, &config).await
+    }
+}
+
+async fn accept_loop(
+    listener: &TcpListener,
+    state: Arc<SharedState>,
+    tx: broadcast::Sender<ServerMessage>,
+    config: &ServerConfig,
+) -> Result<()> {
     loop {
         let (stream, addr) = listener.accept().await?;
         info!(%addr, "client connected");
@@ -80,6 +101,35 @@ pub async fn run_with_listener(listener: TcpListener, config: ServerConfig) -> R
                 warn!(error = %err, "client session ended with error");
             }
         });
+    }
+}
+
+async fn admin_stdin_loop(quit_tx: oneshot::Sender<()>) {
+    use admin::{AdminCommandParseError, handle_admin_command, parse_admin_command};
+
+    let stdin = tokio::io::stdin();
+    let mut reader = BufReader::new(stdin);
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => match parse_admin_command(&line) {
+                Ok(cmd) => {
+                    let result = handle_admin_command(cmd);
+                    info!(message = %result.message, "admin");
+                    if result.should_quit {
+                        let _ = quit_tx.send(());
+                        return;
+                    }
+                }
+                Err(AdminCommandParseError::Empty) => {}
+                Err(e) => {
+                    info!(error = %e, "admin command error");
+                }
+            },
+        }
     }
 }
 

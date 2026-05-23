@@ -200,6 +200,22 @@ impl Default for LoggingSection {
     }
 }
 
+// --- Section: [admin] ---
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AdminSection {
+    pub local_stdin_enabled: bool,
+}
+
+impl Default for AdminSection {
+    fn default() -> Self {
+        Self {
+            local_stdin_enabled: false,
+        }
+    }
+}
+
 // --- Top-level config ---
 
 #[derive(Debug, Clone, Deserialize)]
@@ -211,6 +227,7 @@ pub struct ServerConfig {
     pub join_gate: JoinGateSection,
     pub diagnostics: DiagnosticsSection,
     pub logging: LoggingSection,
+    pub admin: AdminSection,
 }
 
 impl Default for ServerConfig {
@@ -222,6 +239,7 @@ impl Default for ServerConfig {
             join_gate: JoinGateSection::default(),
             diagnostics: DiagnosticsSection::default(),
             logging: LoggingSection::default(),
+            admin: AdminSection::default(),
         }
     }
 }
@@ -514,5 +532,32 @@ format = "binary"
         assert_eq!(LogLevel::Info.as_str(), "info");
         assert_eq!(LogLevel::Warn.as_str(), "warn");
         assert_eq!(LogLevel::Error.as_str(), "error");
+    }
+
+    #[test]
+    fn default_admin_section_has_stdin_disabled() {
+        let cfg = ServerConfig::default();
+        assert!(!cfg.admin.local_stdin_enabled);
+    }
+
+    #[test]
+    fn admin_section_parses_enabled() {
+        let toml = r#"
+[admin]
+local_stdin_enabled = true
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.admin.local_stdin_enabled);
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn admin_section_omitted_defaults_to_disabled() {
+        let toml = r#"
+[server]
+tick_rate = 20
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        assert!(!cfg.admin.local_stdin_enabled);
     }
 }

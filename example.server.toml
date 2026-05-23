@@ -53,3 +53,10 @@ level = "info"
 format = "text"
 # Include the Rust module target in each log line.
 show_targets = false
+
+[admin]
+# Enable the local stdin admin debug command loop.
+# When true, the server reads commands from stdin: help, status, sessions,
+# resources, diagnostics, quit. No network exposure. No authentication required
+# (local process only). Disabled by default.
+local_stdin_enabled = false
