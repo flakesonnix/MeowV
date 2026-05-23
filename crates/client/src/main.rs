@@ -3,6 +3,7 @@ use std::env;
 use anyhow::{Context, Result};
 use protocol::{decode_server_line, encode_line, ClientMessage, PROTOCOL_VERSION};
 use serde::Deserialize;
+use server_browser::{filter_current_protocol, LocalJsonServerListSource, ServerListSource};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
@@ -71,6 +72,12 @@ async fn main() -> Result<()> {
     init_logging();
 
     let args: Vec<String> = env::args().collect();
+
+    if let Some(path) = read_flag(&args, "--server-list") {
+        print_server_list(&path)?;
+        return Ok(());
+    }
+
     let config = ClientConfig::load(&args)?;
 
     let stream = TcpStream::connect(&config.addr).await?;
@@ -101,6 +108,40 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_server_list(path: &str) -> Result<()> {
+    let source = LocalJsonServerListSource::new(path);
+    let entries = source.load()?;
+    let entries = filter_current_protocol(&entries);
+
+    println!(
+        "{:<24} {:<21} {:<9} {:<8} {:<10} {}",
+        "NAME", "ADDRESS", "PLAYERS", "PROTO", "EDITION", "TAGS"
+    );
+
+    for entry in entries {
+        println!(
+            "{:<24} {:<21} {:<9} {:<8} {:<10} {}",
+            entry.name,
+            format!("{}:{}", entry.address, entry.port),
+            format!("{}/{}", entry.current_players, entry.max_players),
+            entry.protocol_version,
+            format_edition(&entry.edition_compatibility),
+            entry.tags.join(",")
+        );
+    }
+
+    Ok(())
+}
+
+fn format_edition(edition: &server_browser::EditionCompatibility) -> &'static str {
+    match edition {
+        server_browser::EditionCompatibility::Legacy => "legacy",
+        server_browser::EditionCompatibility::Enhanced => "enhanced",
+        server_browser::EditionCompatibility::Any => "any",
+        server_browser::EditionCompatibility::Unknown => "unknown",
+    }
 }
 
 fn init_logging() {
