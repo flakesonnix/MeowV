@@ -1,4 +1,5 @@
-use std::process::Command;
+// std::process::Command previously used for an integration-style test; keep commented to avoid warnings
+// use std::process::Command;
 use anyhow::Result;
 use tokio::{net::TcpListener, sync::oneshot};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -43,7 +44,7 @@ async fn cli_ping_once_timeout() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
-    let (ready_tx, ready_rx) = oneshot::channel::<()>();
+    let (ready_tx, _ready_rx) = oneshot::channel::<()>();
     let server_task = tokio::spawn(async move {
         // accept one connection and perform minimal handshake then ignore
         if let Ok((mut socket, _)) = listener.accept().await {
