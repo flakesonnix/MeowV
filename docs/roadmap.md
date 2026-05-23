@@ -30,6 +30,21 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.6
+
+Server runtime status snapshot:
+
+- `ServerRuntimeStatus` — 13 fields: server identity, protocol policy flags,
+  session counts (default 0), resource dir, diagnostics/admin flags
+- `from_config(&ServerConfig)` — derives snapshot from config; no timestamps
+- `with_session_counts(connected, ready_dry_run, failed)` — returns updated snapshot
+- `to_text()` — deterministic `key: value` multi-line output; no client IPs
+- `handle_admin_command_with_status(command, Option<&ServerRuntimeStatus>)` — status/sessions/resources commands use snapshot data when provided
+- `handle_admin_command` now delegates to `handle_admin_command_with_status(cmd, None)`
+- `admin_stdin_loop` accepts `ServerConfig`, builds snapshot at startup, uses status-aware handler
+- `docs/server-runtime-status.md`
+- 8 status unit tests; 4 admin integration tests
+
 ## Milestone 2.5
 
 Local server admin debug commands:
