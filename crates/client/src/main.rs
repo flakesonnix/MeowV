@@ -375,6 +375,7 @@ async fn main() -> Result<()> {
 
         // For now, run indefinitely until stdin EOF or program exit; we simply wait here.
         // In future we'll wire to signal handling. To keep it simple, block until stdin closes.
+        use tokio::io::AsyncReadExt;
         let mut stdin = tokio::io::stdin();
         let mut buf = [0u8; 1];
         // read until EOF
