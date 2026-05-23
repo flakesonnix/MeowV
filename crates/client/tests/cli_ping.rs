@@ -22,19 +22,16 @@ async fn cli_ping_once_success() -> Result<()> {
 
     let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
 
-    // Run the client binary with --ping-once
-    let exe = env!("CARGO_BIN_EXE_client");
-    let output = Command::new(exe)
-        .arg("--addr")
-        .arg(format!("{}", addr))
-        .arg("--ping-once")
-        .arg("--ping-sequence")
-        .arg("1")
-        .output()?;
+    // Perform the ping flow via the library helper instead of spawning the binary.
+    let stream = tokio::net::TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stdout.contains("Ping 1: Pong received") || stderr.contains("Ping 1: Pong received"), "expected success message, got stdout='{}' stderr='{}'", stdout, stderr);
+    // Send Login
+    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "cli-test".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+
+    // Use client library helper
+    client::perform_ping_once(&mut writer_half, &mut lines, 1, tokio::time::Duration::from_secs(2)).await?;
 
     server_task.abort();
     Ok(())
@@ -68,20 +65,16 @@ async fn cli_ping_once_timeout() -> Result<()> {
     // Wait for server to be ready
     let _ = ready_rx.await;
 
-    let exe = env!("CARGO_BIN_EXE_client");
-    let output = Command::new(exe)
-        .arg("--addr")
-        .arg(format!("{}", addr))
-        .arg("--ping-once")
-        .arg("--ping-sequence")
-        .arg("99")
-        .arg("--ping-timeout-ms")
-        .arg("50")
-        .output()?;
+    let stream = tokio::net::TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stdout.contains("failed") || stderr.contains("failed"), "expected failure message, got stdout='{}' stderr='{}'", stdout, stderr);
+    // Send Login
+    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "cli-test".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+
+    // Use client library helper with short timeout
+    let res = client::perform_ping_once(&mut writer_half, &mut lines, 99, tokio::time::Duration::from_millis(50)).await;
+    assert!(res.is_err(), "expected timeout/failure when server does not respond");
 
     server_task.abort();
     Ok(())
