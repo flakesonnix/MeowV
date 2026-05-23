@@ -56,19 +56,25 @@ pub fn parse_admin_command(input: &str) -> Result<AdminCommand, AdminCommandPars
     }
 }
 
-/// Handle a parsed admin command and produce a result message.
-/// Returns placeholder messages for commands that do not yet expose live
-/// session internals. `should_quit` is true only for `Quit`.
+/// Handle a parsed admin command. Returns placeholder messages; `should_quit` only for `Quit`.
 pub fn handle_admin_command(command: AdminCommand) -> AdminCommandResult {
-    handle_admin_command_with_status(command, None)
+    handle_admin_command_with_context(command, None, None)
 }
 
 /// Handle a parsed admin command with an optional runtime status snapshot.
-/// When `status` is `Some`, the `Status`, `Sessions`, and `Resources` commands
-/// use data from the snapshot instead of the generic placeholder strings.
 pub fn handle_admin_command_with_status(
     command: AdminCommand,
     status: Option<&crate::status::ServerRuntimeStatus>,
+) -> AdminCommandResult {
+    handle_admin_command_with_context(command, status, None)
+}
+
+/// Full context handler — status for policy/resource fields, registry for diagnostics.
+/// When `registry` is `Some`, the `Diagnostics` command emits live session registry text.
+pub fn handle_admin_command_with_context(
+    command: AdminCommand,
+    status: Option<&crate::status::ServerRuntimeStatus>,
+    registry: Option<&crate::session_registry::SessionRegistrySnapshot>,
 ) -> AdminCommandResult {
     let (message, should_quit) = match &command {
         AdminCommand::Help => (
@@ -101,7 +107,9 @@ pub fn handle_admin_command_with_status(
             false,
         ),
         AdminCommand::Diagnostics => (
-            "live diagnostics not yet available (placeholder)".to_string(),
+            registry
+                .map(|r| r.to_diagnostics_text())
+                .unwrap_or_else(|| "live diagnostics not yet available (placeholder)".to_string()),
             false,
         ),
         AdminCommand::Quit => (
@@ -298,5 +306,97 @@ mod tests {
         let result = handle_admin_command_with_status(AdminCommand::Resources, Some(&status));
         assert!(result.message.contains("announcement_dir="));
         assert!(!result.message.contains("placeholder"));
+    }
+
+    #[test]
+    fn diagnostics_with_empty_registry_snapshot() {
+        use crate::session_registry::SessionRegistry;
+        let snap = SessionRegistry::new().snapshot();
+        let result =
+            handle_admin_command_with_context(AdminCommand::Diagnostics, None, Some(&snap));
+        assert!(result.message.contains("no active sessions"));
+        assert!(!result.should_quit);
+    }
+
+    #[test]
+    fn diagnostics_with_connected_session() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let result =
+            handle_admin_command_with_context(AdminCommand::Diagnostics, None, Some(&snap));
+        assert!(result.message.contains("sessions: 1"));
+        assert!(result.message.contains("session-1"));
+    }
+
+    #[test]
+    fn diagnostics_with_ready_dry_run_session() {
+        use crate::session::SessionState;
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_state(&id, SessionState::ReadyDryRun);
+        let snap = reg.snapshot();
+        let result =
+            handle_admin_command_with_context(AdminCommand::Diagnostics, None, Some(&snap));
+        assert!(result.message.contains("ready_dry_run=true"));
+        assert!(result.message.contains("ready_dry_run: 1"));
+    }
+
+    #[test]
+    fn diagnostics_with_failed_session() {
+        use crate::session::SessionState;
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_state(&id, SessionState::Failed);
+        let snap = reg.snapshot();
+        let result =
+            handle_admin_command_with_context(AdminCommand::Diagnostics, None, Some(&snap));
+        assert!(result.message.contains("failed=true"));
+        assert!(result.message.contains("failed: 1"));
+    }
+
+    #[test]
+    fn diagnostics_output_is_deterministic() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let r1 = handle_admin_command_with_context(AdminCommand::Diagnostics, None, Some(&snap));
+        let r2 = handle_admin_command_with_context(AdminCommand::Diagnostics, None, Some(&snap));
+        assert_eq!(r1.message, r2.message);
+    }
+
+    #[test]
+    fn diagnostics_output_omits_ip_personal_data() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let result =
+            handle_admin_command_with_context(AdminCommand::Diagnostics, None, Some(&snap));
+        assert!(!result.message.contains("ip"));
+        assert!(!result.message.contains("addr"));
+        assert!(!result.message.contains("peer"));
+        assert!(!result.message.contains("name"));
+    }
+
+    #[test]
+    fn diagnostics_does_not_mutate_snapshot() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let count_before = snap.connected_sessions;
+        let _ = handle_admin_command_with_context(AdminCommand::Diagnostics, None, Some(&snap));
+        assert_eq!(snap.connected_sessions, count_before);
+    }
+
+    #[test]
+    fn diagnostics_falls_back_to_placeholder_without_registry() {
+        let result = handle_admin_command_with_context(AdminCommand::Diagnostics, None, None);
+        assert!(result.message.contains("placeholder"));
     }
 }
