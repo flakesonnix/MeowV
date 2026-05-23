@@ -4,6 +4,7 @@ mod diagnostics;
 mod event_log;
 mod session;
 mod session_registry;
+mod shutdown;
 mod status;
 
 pub use config::{
@@ -54,6 +55,7 @@ struct ClientInfo {
 struct SharedState {
     clients: RwLock<HashMap<Uuid, ClientInfo>>,
     registry: Arc<std::sync::Mutex<session_registry::SessionRegistry>>,
+    shutdown: std::sync::Mutex<shutdown::ShutdownState>,
 }
 
 impl Default for SharedState {
@@ -63,6 +65,7 @@ impl Default for SharedState {
             registry: Arc::new(std::sync::Mutex::new(
                 session_registry::SessionRegistry::new(),
             )),
+            shutdown: std::sync::Mutex::new(shutdown::ShutdownState::new()),
         }
     }
 }
@@ -102,13 +105,28 @@ pub async fn run_with_listener(listener: TcpListener, config: ServerConfig) -> R
     if config.admin.local_stdin_enabled {
         let (quit_tx, quit_rx) = oneshot::channel::<()>();
         tokio::spawn(admin_stdin_loop(quit_tx, config.clone(), state.clone()));
-        tokio::select! {
-            result = accept_loop(&listener, state, tx, &config) => result,
+        let result = tokio::select! {
+            result = accept_loop(&listener, state.clone(), tx, &config) => result,
             _ = quit_rx => {
                 info!("server shutdown requested via admin command");
                 Ok(())
             }
-        }
+        };
+        let reg_snap = state.registry.lock().unwrap().snapshot();
+        let reason = state
+            .shutdown
+            .lock()
+            .unwrap()
+            .reason()
+            .unwrap_or(shutdown::ShutdownReason::AdminQuit);
+        let summary = shutdown::build_shutdown_summary(&config, &reg_snap, reason);
+        info!(
+            reason = %summary.reason,
+            "server shutdown: final summary\n--- status ---\n{}\n--- sessions ---\n{}",
+            summary.status_dump,
+            summary.registry_dump,
+        );
+        result
     } else {
         accept_loop(&listener, state, tx, &config).await
     }
@@ -163,6 +181,7 @@ async fn admin_stdin_loop(
                     let result = handle_admin_command_with_status(cmd, Some(&current_status));
                     info!(message = %result.message, "admin");
                     if result.should_quit {
+                        state.shutdown.lock().unwrap().request(shutdown::ShutdownReason::AdminQuit);
                         let _ = quit_tx.send(());
                         return;
                     }
