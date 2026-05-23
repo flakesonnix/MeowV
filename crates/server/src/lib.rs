@@ -15,6 +15,7 @@ pub use config::{
 pub use session_registry::{
     SessionId, SessionRegistry, SessionRegistryEntry, SessionRegistrySnapshot,
 };
+pub use shutdown::{ShutdownReason, ShutdownSummary, build_shutdown_summary};
 pub use status::ServerRuntimeStatus;
 
 use config::DiagnosticsFormat as Fmt;
