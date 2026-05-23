@@ -167,6 +167,12 @@ async fn handle_client(
     let mut rx = tx.subscribe();
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut session = SessionStateMachine::new();
+    let mut event_log = SessionEventLog::new();
+    event_log.record(
+        SessionEventKind::Connected,
+        SessionState::Connected,
+        "client connected",
+    );
     info!(%client_id, state = ?session.state(), "session: connected");
     let (name, shared_caps) = match lines.next_line().await? {
         Some(line) => match decode_client_line(&line)? {
@@ -177,10 +183,22 @@ async fn handle_client(
                 if let Err(e) = session.on_hello_received() {
                     warn!(%client_id, error = %e, "session: unexpected hello transition error");
                 } else {
+                    event_log.record(
+                        SessionEventKind::HelloReceived,
+                        SessionState::HelloReceived,
+                        format!("login from {name}"),
+                    );
                     info!(%client_id, state = ?session.state(), "session: hello received");
                 }
 
                 if let Err(_) = session.on_version_checked(protocol_version) {
+                    event_log.record(
+                        SessionEventKind::Failed,
+                        SessionState::Failed,
+                        format!(
+                            "protocol mismatch: client={protocol_version} server={PROTOCOL_VERSION}"
+                        ),
+                    );
                     send_direct(
                         &mut writer_half,
                         &ServerMessage::Disconnect {
@@ -194,6 +212,11 @@ async fn handle_client(
                     info!(%client_id, state = ?session.state(), "session: failed on version mismatch");
                     return Ok(());
                 }
+                event_log.record(
+                    SessionEventKind::VersionChecked,
+                    SessionState::VersionChecked,
+                    format!("protocol version {protocol_version} matched"),
+                );
                 info!(%client_id, state = ?session.state(), "session: version checked");
 
                 let server_profile = current_protocol_profile();
@@ -224,6 +247,11 @@ async fn handle_client(
                 if let Err(e) = session.on_negotiation_logged() {
                     warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
                 } else {
+                    event_log.record(
+                        SessionEventKind::ProtocolNegotiationDryRun,
+                        SessionState::NegotiationDryRunLogged,
+                        format!("negotiation status: {:?}", negotiation.status),
+                    );
                     info!(%client_id, state = ?session.state(), "session: negotiation dry-run logged");
                 }
 
@@ -272,6 +300,11 @@ async fn handle_client(
         .and_then(|client| client.last_announcement.clone())
     {
         let gate = capability_gate_report(ProtocolCapability::ResourceAnnouncement, &shared_caps);
+        event_log.record(
+            SessionEventKind::CapabilityGateChecked,
+            session.state().clone(),
+            format!("ResourceAnnouncement gate: supported={}", gate.supported),
+        );
         info!(
             %client_id,
             capability = "ResourceAnnouncement",
@@ -287,6 +320,11 @@ async fn handle_client(
         if let Err(e) = session.on_resource_announcement_sent() {
             warn!(%client_id, error = %e, "session: unexpected announcement transition error");
         } else {
+            event_log.record(
+                SessionEventKind::ResourceAnnouncementSent,
+                SessionState::ResourceAnnouncementSent,
+                "resource announcement sent to client",
+            );
             info!(%client_id, state = ?session.state(), "session: resource announcement sent");
         }
     }
@@ -356,6 +394,11 @@ async fn handle_client(
                     if let Err(e) = session.on_availability_report_received() {
                         warn!(%client_id, error = %e, "session: unexpected availability transition error");
                     } else {
+                        event_log.record(
+                            SessionEventKind::AvailabilityReportReceived,
+                            SessionState::AvailabilityReportReceived,
+                            "resource availability report received from client",
+                        );
                         info!(%client_id, state = ?session.state(), "session: availability report received");
                     }
 
@@ -366,9 +409,22 @@ async fn handle_client(
 
                     match session.on_policy_evaluated(&policy_decision) {
                         Ok(()) => {
+                            event_log.record(
+                                SessionEventKind::ResourcePolicyEvaluated,
+                                SessionState::ResourcePolicyEvaluated,
+                                format!("policy decision: {:?}", policy_decision),
+                            );
                             info!(%client_id, state = ?session.state(), "session: resource policy evaluated");
                         }
                         Err(SessionStateError::PolicyBlockedDryRun) => {
+                            event_log.record(
+                                SessionEventKind::ResourcePolicyEvaluated,
+                                SessionState::ResourcePolicyEvaluated,
+                                format!(
+                                    "policy decision: {:?} (dry-run, not enforced)",
+                                    policy_decision
+                                ),
+                            );
                             info!(
                                 %client_id,
                                 state = ?session.state(),
@@ -381,6 +437,11 @@ async fn handle_client(
                     }
 
                     let gate = capability_gate_report(ProtocolCapability::JoinGateDryRun, &caps);
+                    event_log.record(
+                        SessionEventKind::CapabilityGateChecked,
+                        session.state().clone(),
+                        format!("JoinGateDryRun gate: supported={}", gate.supported),
+                    );
                     info!(
                         %client_id,
                         capability = "JoinGateDryRun",
@@ -394,12 +455,22 @@ async fn handle_client(
                     if let Err(e) = session.on_join_gate_sent() {
                         warn!(%client_id, error = %e, "session: unexpected join gate transition error");
                     } else {
+                        event_log.record(
+                            SessionEventKind::JoinGateDryRunSent,
+                            SessionState::JoinGateDryRunSent,
+                            "join gate dry-run decision sent to client",
+                        );
                         info!(%client_id, state = ?session.state(), "session: join gate dry-run sent");
                     }
 
                     if let Err(e) = session.mark_ready_dry_run() {
                         warn!(%client_id, error = %e, "session: unexpected ready transition error");
                     } else {
+                        event_log.record(
+                            SessionEventKind::ReadyDryRun,
+                            SessionState::ReadyDryRun,
+                            "handshake pipeline complete (dry-run)",
+                        );
                         info!(%client_id, state = ?session.state(), "session: ready (dry-run)");
                     }
                 } else {
@@ -416,6 +487,12 @@ async fn handle_client(
     });
 
     writer_task.abort();
+    info!(
+        %client_id,
+        event_count = event_log.len(),
+        final_state = ?session.state(),
+        "session audit log complete"
+    );
     Ok(())
 }
 
