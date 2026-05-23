@@ -3,12 +3,16 @@ mod config;
 mod diagnostics;
 mod event_log;
 mod session;
+mod session_registry;
 mod status;
 
 pub use config::{
     AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, JoinGateConfigMode,
     JoinGateSection, LogFormat, LogLevel, LoggingSection, ProtocolSection, ResourcesSection,
     ServerConfig, ServerSection,
+};
+pub use session_registry::{
+    SessionId, SessionRegistry, SessionRegistryEntry, SessionRegistrySnapshot,
 };
 pub use status::ServerRuntimeStatus;
 
