@@ -3,8 +3,9 @@ use std::env;
 use anyhow::{Context, Result};
 use protocol::{decode_server_line, encode_line, ClientMessage, PROTOCOL_VERSION};
 use resource_manifest::{
-    build_pack_index, discover_resources, load_manifest_from_path, resolve_load_order,
-    verify_cache_for_resource, CacheFileStatus, ResourceManifest,
+    build_load_plan_from_root, build_pack_index, discover_resources, load_manifest_from_path,
+    resolve_load_order, verify_cache_for_resource, CacheFileStatus, ResourceEntrypointKind,
+    ResourceManifest, ResourceRuntimePhase,
 };
 use serde::Deserialize;
 use server_browser::{filter_current_protocol, LocalJsonServerListSource, ServerListSource};
@@ -99,6 +100,11 @@ async fn main() -> Result<()> {
 
     if let Some(path) = read_flag(&args, "--resource-registry") {
         print_resource_registry(&path)?;
+        return Ok(());
+    }
+
+    if let Some(path) = read_flag(&args, "--resource-load-plan") {
+        print_resource_load_plan(&path)?;
         return Ok(());
     }
 
@@ -273,6 +279,57 @@ fn print_resource_registry(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn print_resource_load_plan(path: &str) -> Result<()> {
+    let plan = build_load_plan_from_root(path)?;
+
+    println!("Resource Load Order: {}", plan.resources.len());
+    for resource in &plan.resources {
+        println!("- {}", resource.name);
+        println!(
+            "  Dependencies: {}",
+            if resource.dependencies.is_empty() {
+                "<none>".to_string()
+            } else {
+                resource.dependencies.join(", ")
+            }
+        );
+        println!("  Phase: {}", format_runtime_phase(&resource.phase));
+
+        let server_entrypoints = resource
+            .entrypoints
+            .iter()
+            .filter(|entrypoint| entrypoint.kind == ResourceEntrypointKind::Server)
+            .map(|entrypoint| entrypoint.path.display().to_string())
+            .collect::<Vec<_>>();
+        let client_entrypoints = resource
+            .entrypoints
+            .iter()
+            .filter(|entrypoint| entrypoint.kind == ResourceEntrypointKind::Client)
+            .map(|entrypoint| entrypoint.path.display().to_string())
+            .collect::<Vec<_>>();
+
+        println!(
+            "  Server Entrypoints: {}",
+            if server_entrypoints.is_empty() {
+                "<none>".to_string()
+            } else {
+                server_entrypoints.join(", ")
+            }
+        );
+        println!(
+            "  Client Entrypoints: {}",
+            if client_entrypoints.is_empty() {
+                "<none>".to_string()
+            } else {
+                client_entrypoints.join(", ")
+            }
+        );
+    }
+
+    println!("No scripts were executed.");
+    Ok(())
+}
+
 fn format_edition(edition: &server_browser::EditionCompatibility) -> &'static str {
     match edition {
         server_browser::EditionCompatibility::Legacy => "legacy",
@@ -297,6 +354,15 @@ fn format_cache_status(status: &CacheFileStatus) -> &'static str {
         CacheFileStatus::Missing => "missing",
         CacheFileStatus::SizeMismatch => "size_mismatch",
         CacheFileStatus::HashMismatch => "hash_mismatch",
+    }
+}
+
+fn format_runtime_phase(phase: &ResourceRuntimePhase) -> &'static str {
+    match phase {
+        ResourceRuntimePhase::Planned => "planned",
+        ResourceRuntimePhase::Validated => "validated",
+        ResourceRuntimePhase::Ready => "ready",
+        ResourceRuntimePhase::Skipped => "skipped",
     }
 }
 
