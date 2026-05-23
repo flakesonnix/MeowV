@@ -21,6 +21,14 @@ pub struct EntityState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourceAnnouncement {
     pub resources: Vec<AnnouncedResource>,
+    pub signature: Option<ResourceAnnouncementSignature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceAnnouncementSignature {
+    pub algorithm: String,
+    pub key_id: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,6 +117,22 @@ pub struct JoinGateDecision {
     pub outcome: JoinGateOutcome,
     pub reason: String,
     pub policy_evaluation: ResourcePolicyEvaluation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureVerificationStatus {
+    NotProvided,
+    UnsupportedAlgorithm,
+    Invalid,
+    Valid,
+    NotChecked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SignatureVerificationReport {
+    pub status: SignatureVerificationStatus,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +290,24 @@ pub fn build_join_gate_decision(policy_evaluation: ResourcePolicyEvaluation) -> 
     }
 }
 
+pub fn check_announcement_signature_stub(
+    announcement: &ResourceAnnouncement,
+) -> SignatureVerificationReport {
+    match &announcement.signature {
+        None => SignatureVerificationReport {
+            status: SignatureVerificationStatus::NotProvided,
+            reason: "resource announcement signature not provided".to_string(),
+        },
+        Some(signature) => SignatureVerificationReport {
+            status: SignatureVerificationStatus::NotChecked,
+            reason: format!(
+                "signature verification for algorithm '{}' and key '{}' is not enforced in this milestone",
+                signature.algorithm, signature.key_id
+            ),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +326,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 requirement_level: ResourceRequirementLevel::Required,
             }],
+            signature: None,
         };
 
         let line = encode_line(&ServerMessage::ResourceAnnouncement(announcement.clone())).unwrap();
@@ -315,8 +358,10 @@ mod tests {
 
     #[test]
     fn protocol_messages_include_resource_types() {
-        let server =
-            ServerMessage::ResourceAnnouncement(ResourceAnnouncement { resources: vec![] });
+        let server = ServerMessage::ResourceAnnouncement(ResourceAnnouncement {
+            resources: vec![],
+            signature: None,
+        });
         let client = ClientMessage::ResourceAvailabilityReport(ResourceAvailabilityReport {
             resources: vec![],
             is_fully_available: true,
@@ -398,6 +443,53 @@ mod tests {
         let report = sample_report(ResourceAvailabilityStatus::Available);
         let evaluation = evaluate_resource_policy(&announcement, &report);
         assert_eq!(evaluation.decision, ResourceJoinDecision::Allowed);
+    }
+
+    #[test]
+    fn resource_announcement_serializes_without_signature() {
+        let announcement = sample_announcement(ResourceRequirementLevel::Required);
+        let line = encode_line(&ServerMessage::ResourceAnnouncement(announcement.clone())).unwrap();
+        let decoded = decode_server_line(line.trim()).unwrap();
+        match decoded {
+            ServerMessage::ResourceAnnouncement(actual) => assert_eq!(actual, announcement),
+            other => panic!("unexpected packet: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resource_announcement_serializes_with_signature() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "deadbeef".to_string(),
+        });
+        let line = encode_line(&ServerMessage::ResourceAnnouncement(announcement.clone())).unwrap();
+        let decoded = decode_server_line(line.trim()).unwrap();
+        match decoded {
+            ServerMessage::ResourceAnnouncement(actual) => assert_eq!(actual, announcement),
+            other => panic!("unexpected packet: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_signature_returns_not_provided() {
+        let report = check_announcement_signature_stub(&sample_announcement(
+            ResourceRequirementLevel::Required,
+        ));
+        assert_eq!(report.status, SignatureVerificationStatus::NotProvided);
+    }
+
+    #[test]
+    fn present_signature_returns_not_checked() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "deadbeef".to_string(),
+        });
+        let report = check_announcement_signature_stub(&announcement);
+        assert_eq!(report.status, SignatureVerificationStatus::NotChecked);
     }
 
     #[test]
@@ -510,6 +602,7 @@ mod tests {
                     requirement_level: ResourceRequirementLevel::Required,
                 },
             ],
+            signature: None,
         };
         let report = ResourceAvailabilityReport {
             resources: vec![],
@@ -535,6 +628,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 requirement_level,
             }],
+            signature: None,
         }
     }
 
