@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 use uuid::Uuid;
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -29,6 +31,150 @@ pub struct ResourceAnnouncementSignature {
     pub algorithm: String,
     pub key_id: String,
     pub signature: String,
+}
+
+// ---------------------------------------------------------------------------
+// Signature data model (M3.6 — structural validation only, no crypto)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureAlgorithm {
+    Ed25519,
+}
+
+impl SignatureAlgorithm {
+    pub fn known_names() -> &'static [&'static str] {
+        &["ed25519"]
+    }
+
+    pub fn is_known(name: &str) -> bool {
+        Self::known_names().contains(&name)
+    }
+}
+
+impl fmt::Display for SignatureAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ed25519 => write!(f, "ed25519"),
+        }
+    }
+}
+
+impl FromStr for SignatureAlgorithm {
+    type Err = SignatureMetadataError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ed25519" => Ok(Self::Ed25519),
+            other => Err(SignatureMetadataError::UnsupportedAlgorithm(other.to_string())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureMetadataError {
+    UnsupportedAlgorithm(String),
+    EmptyAlgorithm,
+    EmptyKeyId,
+    EmptySignature,
+}
+
+impl fmt::Display for SignatureMetadataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedAlgorithm(alg) => {
+                write!(f, "unsupported signature algorithm: '{alg}'")
+            }
+            Self::EmptyAlgorithm => write!(f, "signature algorithm is empty"),
+            Self::EmptyKeyId => write!(f, "signature key_id is empty"),
+            Self::EmptySignature => write!(f, "signature value is empty"),
+        }
+    }
+}
+
+pub fn validate_signature_metadata(
+    signature: &ResourceAnnouncementSignature,
+) -> Result<(), SignatureMetadataError> {
+    if signature.algorithm.is_empty() {
+        return Err(SignatureMetadataError::EmptyAlgorithm);
+    }
+    if signature.key_id.is_empty() {
+        return Err(SignatureMetadataError::EmptyKeyId);
+    }
+    if signature.signature.is_empty() {
+        return Err(SignatureMetadataError::EmptySignature);
+    }
+    let _ = SignatureAlgorithm::from_str(&signature.algorithm)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Canonical announcement payload — defines what would be signed
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanonicalAnnouncementPayload {
+    pub protocol_version: u32,
+    pub algorithm: String,
+    pub key_id: String,
+    pub resources: Vec<CanonicalResourcePayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanonicalResourcePayload {
+    pub name: String,
+    pub version: String,
+    pub requirement_level: ResourceRequirementLevel,
+    pub files: Vec<CanonicalFilePayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanonicalFilePayload {
+    pub relative_path: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+pub fn build_canonical_payload(announcement: &ResourceAnnouncement) -> Option<CanonicalAnnouncementPayload> {
+    let sig = announcement.signature.as_ref()?;
+    if sig.algorithm.is_empty() || sig.key_id.is_empty() {
+        return None;
+    }
+
+    let mut resources: Vec<CanonicalResourcePayload> = announcement
+        .resources
+        .iter()
+        .map(|r| {
+            let mut files: Vec<CanonicalFilePayload> = r
+                .files
+                .iter()
+                .map(|f| CanonicalFilePayload {
+                    relative_path: f.relative_path.clone(),
+                    size_bytes: f.size_bytes,
+                    sha256: f.sha256.clone(),
+                })
+                .collect();
+            files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+
+            CanonicalResourcePayload {
+                name: r.name.clone(),
+                version: r.version.clone(),
+                requirement_level: r.requirement_level.clone(),
+                files,
+            }
+        })
+        .collect();
+    resources.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Some(CanonicalAnnouncementPayload {
+        protocol_version: announcement
+            .resources
+            .first()
+            .map(|r| r.protocol_version)
+            .unwrap_or(0),
+        algorithm: sig.algorithm.clone(),
+        key_id: sig.key_id.clone(),
+        resources,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -298,12 +444,26 @@ pub fn check_announcement_signature_stub(
             status: SignatureVerificationStatus::NotProvided,
             reason: "resource announcement signature not provided".to_string(),
         },
-        Some(signature) => SignatureVerificationReport {
-            status: SignatureVerificationStatus::NotChecked,
-            reason: format!(
-                "signature verification for algorithm '{}' and key '{}' is not enforced in this milestone",
-                signature.algorithm, signature.key_id
-            ),
+        Some(signature) => match validate_signature_metadata(signature) {
+            Err(err) => {
+                let status = match &err {
+                    SignatureMetadataError::UnsupportedAlgorithm(_) => {
+                        SignatureVerificationStatus::UnsupportedAlgorithm
+                    }
+                    _ => SignatureVerificationStatus::Invalid,
+                };
+                SignatureVerificationReport {
+                    status,
+                    reason: err.to_string(),
+                }
+            }
+            Ok(()) => SignatureVerificationReport {
+                status: SignatureVerificationStatus::NotChecked,
+                reason: format!(
+                    "signature metadata is valid: algorithm '{}', key '{}'; cryptographic verification not enforced in this milestone",
+                    signature.algorithm, signature.key_id
+                ),
+            },
         },
     }
 }
@@ -1137,4 +1297,282 @@ mod tests {
         assert!(!report.supported);
         assert_eq!(report.capability, ProtocolCapability::ResourceAnnouncement);
     }
+
+    // -------------------------------------------------------------------
+    // Signature metadata model tests (M3.6)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn validate_signature_metadata_valid_ed25519() {
+        let sig = ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        };
+        assert!(validate_signature_metadata(&sig).is_ok());
+    }
+
+    #[test]
+    fn validate_signature_metadata_empty_algorithm() {
+        let sig = ResourceAnnouncementSignature {
+            algorithm: "".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        };
+        let err = validate_signature_metadata(&sig).unwrap_err();
+        assert_eq!(err, SignatureMetadataError::EmptyAlgorithm);
+    }
+
+    #[test]
+    fn validate_signature_metadata_empty_key_id() {
+        let sig = ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        };
+        let err = validate_signature_metadata(&sig).unwrap_err();
+        assert_eq!(err, SignatureMetadataError::EmptyKeyId);
+    }
+
+    #[test]
+    fn validate_signature_metadata_empty_signature() {
+        let sig = ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "".to_string(),
+        };
+        let err = validate_signature_metadata(&sig).unwrap_err();
+        assert_eq!(err, SignatureMetadataError::EmptySignature);
+    }
+
+    #[test]
+    fn validate_signature_metadata_unknown_algorithm() {
+        let sig = ResourceAnnouncementSignature {
+            algorithm: "rsa".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        };
+        let err = validate_signature_metadata(&sig).unwrap_err();
+        assert!(matches!(
+            err,
+            SignatureMetadataError::UnsupportedAlgorithm(_)
+        ));
+    }
+
+    #[test]
+    fn signature_algorithm_display_and_from_str_roundtrip() {
+        let alg = SignatureAlgorithm::Ed25519;
+        assert_eq!(alg.to_string(), "ed25519");
+        let parsed = SignatureAlgorithm::from_str("ed25519").unwrap();
+        assert_eq!(parsed, SignatureAlgorithm::Ed25519);
+    }
+
+    #[test]
+    fn signature_algorithm_unknown_from_str_fails() {
+        let err = SignatureAlgorithm::from_str("rsa").unwrap_err();
+        assert!(matches!(
+            err,
+            SignatureMetadataError::UnsupportedAlgorithm(_)
+        ));
+    }
+
+    #[test]
+    fn signature_algorithm_known_names_includes_ed25519() {
+        assert!(SignatureAlgorithm::known_names().contains(&"ed25519"));
+    }
+
+    #[test]
+    fn signature_algorithm_is_known() {
+        assert!(SignatureAlgorithm::is_known("ed25519"));
+        assert!(!SignatureAlgorithm::is_known("rsa"));
+    }
+
+    #[test]
+    fn stub_returns_not_provided_when_no_signature() {
+        let report = check_announcement_signature_stub(&sample_announcement(
+            ResourceRequirementLevel::Required,
+        ));
+        assert_eq!(report.status, SignatureVerificationStatus::NotProvided);
+    }
+
+    #[test]
+    fn stub_returns_not_checked_for_valid_metadata() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let report = check_announcement_signature_stub(&announcement);
+        assert_eq!(report.status, SignatureVerificationStatus::NotChecked);
+    }
+
+    #[test]
+    fn stub_returns_unsupported_algorithm_for_unknown_algorithm() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "rsa".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let report = check_announcement_signature_stub(&announcement);
+        assert_eq!(
+            report.status,
+            SignatureVerificationStatus::UnsupportedAlgorithm
+        );
+    }
+
+    #[test]
+    fn stub_returns_invalid_for_empty_algorithm() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let report = check_announcement_signature_stub(&announcement);
+        assert_eq!(report.status, SignatureVerificationStatus::Invalid);
+    }
+
+    #[test]
+    fn stub_returns_invalid_for_empty_key_id() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let report = check_announcement_signature_stub(&announcement);
+        assert_eq!(report.status, SignatureVerificationStatus::Invalid);
+    }
+
+    #[test]
+    fn stub_returns_invalid_for_empty_signature() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "".to_string(),
+        });
+        let report = check_announcement_signature_stub(&announcement);
+        assert_eq!(report.status, SignatureVerificationStatus::Invalid);
+    }
+
+    #[test]
+    fn build_canonical_payload_basic_structure() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let payload = build_canonical_payload(&announcement).unwrap();
+        assert_eq!(payload.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(payload.algorithm, "ed25519");
+        assert_eq!(payload.key_id, "dev-key");
+        assert_eq!(payload.resources.len(), 1);
+        assert_eq!(payload.resources[0].name, "chat");
+        assert_eq!(payload.resources[0].version, "0.1.0");
+        assert_eq!(payload.resources[0].files.len(), 1);
+        assert_eq!(payload.resources[0].files[0].relative_path, "resource.toml");
+        assert_eq!(payload.resources[0].files[0].size_bytes, 123);
+        assert_eq!(payload.resources[0].files[0].sha256, "abc");
+    }
+
+    #[test]
+    fn build_canonical_payload_no_signature_returns_none() {
+        let announcement = sample_announcement(ResourceRequirementLevel::Required);
+        assert!(build_canonical_payload(&announcement).is_none());
+    }
+
+    #[test]
+    fn build_canonical_payload_empty_algorithm_returns_none() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        assert!(build_canonical_payload(&announcement).is_none());
+    }
+
+    #[test]
+    fn build_canonical_payload_deterministic_sorting() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![
+                AnnouncedResource {
+                    name: "zeta".to_string(),
+                    version: "1.0.0".to_string(),
+                    files: vec![
+                        AnnouncedResourceFile {
+                            relative_path: "b.txt".to_string(),
+                            size_bytes: 2,
+                            sha256: "b".to_string(),
+                        },
+                        AnnouncedResourceFile {
+                            relative_path: "a.txt".to_string(),
+                            size_bytes: 1,
+                            sha256: "a".to_string(),
+                        },
+                    ],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Required,
+                },
+                AnnouncedResource {
+                    name: "alpha".to_string(),
+                    version: "0.1.0".to_string(),
+                    files: vec![AnnouncedResourceFile {
+                        relative_path: "c.txt".to_string(),
+                        size_bytes: 3,
+                        sha256: "c".to_string(),
+                    }],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Required,
+                },
+            ],
+            signature: Some(ResourceAnnouncementSignature {
+                algorithm: "ed25519".to_string(),
+                key_id: "dev-key".to_string(),
+                signature: "c29tZS1zaWc=".to_string(),
+            }),
+        };
+        let payload = build_canonical_payload(&announcement).unwrap();
+        // Resources sorted by name
+        assert_eq!(payload.resources[0].name, "alpha");
+        assert_eq!(payload.resources[1].name, "zeta");
+        // Files sorted by relative_path
+        assert_eq!(payload.resources[1].files[0].relative_path, "a.txt");
+        assert_eq!(payload.resources[1].files[1].relative_path, "b.txt");
+    }
+
+    #[test]
+    fn build_canonical_payload_json_serialization_roundtrip() {
+        let mut announcement = sample_announcement(ResourceRequirementLevel::Required);
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let payload = build_canonical_payload(&announcement).unwrap();
+        let json = serde_json::to_string(&payload).unwrap();
+        let decoded: CanonicalAnnouncementPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn signature_metadata_error_display() {
+        let err = SignatureMetadataError::UnsupportedAlgorithm("rsa".to_string());
+        assert!(err.to_string().contains("unsupported"));
+        assert!(err.to_string().contains("rsa"));
+
+        let err = SignatureMetadataError::EmptyAlgorithm;
+        assert!(err.to_string().contains("algorithm"));
+
+        let err = SignatureMetadataError::EmptyKeyId;
+        assert!(err.to_string().contains("key_id"));
+
+        let err = SignatureMetadataError::EmptySignature;
+        assert!(err.to_string().contains("signature"));
+    }
+
 }
