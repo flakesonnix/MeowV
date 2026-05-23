@@ -31,12 +31,11 @@ Resource registry:
 
 ## Milestone 1.1
 
-Protocol compatibility work:
+Runtime boundary:
 
-- explicit version negotiation flow
-- compatibility matrix by release
-- upgrade/deprecation rules
-- wire-format change checklist
+- no-exec load planning
+- runtime separation prep
+- deterministic resource planning
 
 ## Milestone 0.5
 
