@@ -1,3 +1,4 @@
+mod admin;
 mod config;
 mod diagnostics;
 mod event_log;
