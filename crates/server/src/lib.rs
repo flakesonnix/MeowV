@@ -1,5 +1,6 @@
 mod session;
 
+use session::{SessionState, SessionStateError, SessionStateMachine};
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
@@ -163,13 +164,21 @@ async fn handle_client(
     let mut lines = BufReader::new(reader_half).lines();
     let mut rx = tx.subscribe();
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ServerMessage>();
+    let mut session = SessionStateMachine::new();
+    info!(%client_id, state = ?session.state(), "session: connected");
     let (name, shared_caps) = match lines.next_line().await? {
         Some(line) => match decode_client_line(&line)? {
             ClientMessage::Login {
                 name,
                 protocol_version,
             } => {
-                if protocol_version != PROTOCOL_VERSION {
+                if let Err(e) = session.on_hello_received() {
+                    warn!(%client_id, error = %e, "session: unexpected hello transition error");
+                } else {
+                    info!(%client_id, state = ?session.state(), "session: hello received");
+                }
+
+                if let Err(_) = session.on_version_checked(protocol_version) {
                     send_direct(
                         &mut writer_half,
                         &ServerMessage::Disconnect {
@@ -180,8 +189,10 @@ async fn handle_client(
                         },
                     )
                     .await?;
+                    info!(%client_id, state = ?session.state(), "session: failed on version mismatch");
                     return Ok(());
                 }
+                info!(%client_id, state = ?session.state(), "session: version checked");
 
                 let server_profile = current_protocol_profile();
                 let client_profile = ProtocolCompatibilityProfile {
@@ -207,6 +218,11 @@ async fn handle_client(
                         reason = %negotiation.reason,
                         "protocol negotiation dry-run: non-exact overlap detected"
                     );
+                }
+                if let Err(e) = session.on_negotiation_logged() {
+                    warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
+                } else {
+                    info!(%client_id, state = ?session.state(), "session: negotiation dry-run logged");
                 }
 
                 (name, caps)
@@ -266,6 +282,11 @@ async fn handle_client(
             &ServerMessage::ResourceAnnouncement(announcement),
         )
         .await?;
+        if let Err(e) = session.on_resource_announcement_sent() {
+            warn!(%client_id, error = %e, "session: unexpected announcement transition error");
+        } else {
+            info!(%client_id, state = ?session.state(), "session: resource announcement sent");
+        }
     }
 
     let _ = tx.send(ServerMessage::ChatBroadcast {
@@ -330,9 +351,33 @@ async fn handle_client(
                 };
 
                 if let Some((Some(announcement), caps)) = client_data {
+                    if let Err(e) = session.on_availability_report_received() {
+                        warn!(%client_id, error = %e, "session: unexpected availability transition error");
+                    } else {
+                        info!(%client_id, state = ?session.state(), "session: availability report received");
+                    }
+
                     let evaluation = evaluate_resource_policy(&announcement, &report);
                     log_resource_policy_evaluation(client_id, &evaluation);
-                    let decision = build_join_gate_decision(evaluation);
+                    let policy_decision = evaluation.decision.clone();
+                    let gate_decision = build_join_gate_decision(evaluation);
+
+                    match session.on_policy_evaluated(&policy_decision) {
+                        Ok(()) => {
+                            info!(%client_id, state = ?session.state(), "session: resource policy evaluated");
+                        }
+                        Err(SessionStateError::PolicyBlockedDryRun) => {
+                            info!(
+                                %client_id,
+                                state = ?session.state(),
+                                "session: resource policy would block (dry-run only, not enforced)"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(%client_id, error = %e, "session: unexpected policy transition error");
+                        }
+                    }
+
                     let gate = capability_gate_report(ProtocolCapability::JoinGateDryRun, &caps);
                     info!(
                         %client_id,
@@ -341,8 +386,20 @@ async fn handle_client(
                         reason = %gate.reason,
                         "capability gate check: join gate decision (dry-run, report-only)"
                     );
-                    log_join_gate_decision(client_id, &decision);
-                    let _ = client_tx.send(ServerMessage::JoinGateDecision(decision));
+                    log_join_gate_decision(client_id, &gate_decision);
+                    let _ = client_tx.send(ServerMessage::JoinGateDecision(gate_decision));
+
+                    if let Err(e) = session.on_join_gate_sent() {
+                        warn!(%client_id, error = %e, "session: unexpected join gate transition error");
+                    } else {
+                        info!(%client_id, state = ?session.state(), "session: join gate dry-run sent");
+                    }
+
+                    if let Err(e) = session.mark_ready_dry_run() {
+                        warn!(%client_id, error = %e, "session: unexpected ready transition error");
+                    } else {
+                        info!(%client_id, state = ?session.state(), "session: ready (dry-run)");
+                    }
                 } else {
                     warn!(%client_id, "resource availability report received before announcement was stored");
                 }
