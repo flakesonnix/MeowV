@@ -71,7 +71,7 @@ pub async fn run_with_listener(listener: TcpListener, config: ServerConfig) -> R
 
     if config.admin.local_stdin_enabled {
         let (quit_tx, quit_rx) = oneshot::channel::<()>();
-        tokio::spawn(admin_stdin_loop(quit_tx));
+        tokio::spawn(admin_stdin_loop(quit_tx, config.clone()));
         tokio::select! {
             result = accept_loop(&listener, state, tx, &config) => result,
             _ = quit_rx => {
@@ -106,9 +106,10 @@ async fn accept_loop(
     }
 }
 
-async fn admin_stdin_loop(quit_tx: oneshot::Sender<()>) {
-    use admin::{AdminCommandParseError, handle_admin_command, parse_admin_command};
+async fn admin_stdin_loop(quit_tx: oneshot::Sender<()>, config: ServerConfig) {
+    use admin::{AdminCommandParseError, handle_admin_command_with_status, parse_admin_command};
 
+    let snap = status::ServerRuntimeStatus::from_config(&config);
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
     let mut line = String::new();
@@ -119,7 +120,7 @@ async fn admin_stdin_loop(quit_tx: oneshot::Sender<()>) {
             Ok(0) | Err(_) => break,
             Ok(_) => match parse_admin_command(&line) {
                 Ok(cmd) => {
-                    let result = handle_admin_command(cmd);
+                    let result = handle_admin_command_with_status(cmd, Some(&snap));
                     info!(message = %result.message, "admin");
                     if result.should_quit {
                         let _ = quit_tx.send(());

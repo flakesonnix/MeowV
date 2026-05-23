@@ -60,21 +60,44 @@ pub fn parse_admin_command(input: &str) -> Result<AdminCommand, AdminCommandPars
 /// Returns placeholder messages for commands that do not yet expose live
 /// session internals. `should_quit` is true only for `Quit`.
 pub fn handle_admin_command(command: AdminCommand) -> AdminCommandResult {
+    handle_admin_command_with_status(command, None)
+}
+
+/// Handle a parsed admin command with an optional runtime status snapshot.
+/// When `status` is `Some`, the `Status`, `Sessions`, and `Resources` commands
+/// use data from the snapshot instead of the generic placeholder strings.
+pub fn handle_admin_command_with_status(
+    command: AdminCommand,
+    status: Option<&crate::status::ServerRuntimeStatus>,
+) -> AdminCommandResult {
     let (message, should_quit) = match &command {
         AdminCommand::Help => (
             "commands: help, status, sessions, resources, diagnostics, quit".to_string(),
             false,
         ),
         AdminCommand::Status => (
-            "server is running (dry-run mode, all policies report-only)".to_string(),
+            status.map(|s| s.to_text()).unwrap_or_else(|| {
+                "server is running (dry-run mode, all policies report-only)".to_string()
+            }),
             false,
         ),
         AdminCommand::Sessions => (
-            "live session data not yet available (placeholder)".to_string(),
+            status
+                .map(|s| {
+                    format!(
+                        "connected={} ready_dry_run={} failed={}",
+                        s.connected_sessions, s.ready_dry_run_sessions, s.failed_sessions,
+                    )
+                })
+                .unwrap_or_else(|| "live session data not yet available (placeholder)".to_string()),
             false,
         ),
         AdminCommand::Resources => (
-            "live resource data not yet available (placeholder)".to_string(),
+            status
+                .map(|s| format!("announcement_dir={}", s.resource_announcement_dir))
+                .unwrap_or_else(|| {
+                    "live resource data not yet available (placeholder)".to_string()
+                }),
             false,
         ),
         AdminCommand::Diagnostics => (
@@ -237,5 +260,43 @@ mod tests {
             AdminCommandParseError::UnknownCommand(s) => assert_eq!(s, "invalidcmd"),
             other => panic!("expected UnknownCommand, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn handle_with_status_returns_status_text_for_status_command() {
+        use crate::config::ServerConfig;
+        use crate::status::ServerRuntimeStatus;
+        let status = ServerRuntimeStatus::from_config(&ServerConfig::default());
+        let result = handle_admin_command_with_status(AdminCommand::Status, Some(&status));
+        assert_eq!(result.message, status.to_text());
+        assert!(!result.should_quit);
+    }
+
+    #[test]
+    fn handle_with_status_none_falls_back_to_placeholder_for_status() {
+        let result = handle_admin_command_with_status(AdminCommand::Status, None);
+        assert!(result.message.contains("server is running"));
+    }
+
+    #[test]
+    fn handle_with_status_sessions_shows_counts() {
+        use crate::config::ServerConfig;
+        use crate::status::ServerRuntimeStatus;
+        let status =
+            ServerRuntimeStatus::from_config(&ServerConfig::default()).with_session_counts(4, 2, 1);
+        let result = handle_admin_command_with_status(AdminCommand::Sessions, Some(&status));
+        assert!(result.message.contains("connected=4"));
+        assert!(result.message.contains("ready_dry_run=2"));
+        assert!(result.message.contains("failed=1"));
+    }
+
+    #[test]
+    fn handle_with_status_resources_shows_dir() {
+        use crate::config::ServerConfig;
+        use crate::status::ServerRuntimeStatus;
+        let status = ServerRuntimeStatus::from_config(&ServerConfig::default());
+        let result = handle_admin_command_with_status(AdminCommand::Resources, Some(&status));
+        assert!(result.message.contains("announcement_dir="));
+        assert!(!result.message.contains("placeholder"));
     }
 }
