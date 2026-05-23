@@ -44,6 +44,7 @@
 | 3.3 | Resource download design spec — threat model, protocol, staging, signatures |
 | 3.4 | Resource cache repair planning — report-only, no downloads, no mutation |
 | 3.5 | Real signature verification design — design spec for announcement/resource index signature verification |
+| 3.6 | Signature metadata model — typed algorithm enum, structural validation, canonical payload |
 
 ---
 
@@ -159,6 +160,20 @@ Real signature verification design (docs-only):
 - `docs/signed-resource-announcements.md` updated to cross-reference design
 - `docs/resource-download-design.md` updated with new milestone numbering
 - `docs/security-boundaries.md` updated with cross-reference
+
+## Milestone 3.6
+
+Signature metadata model:
+
+- `SignatureAlgorithm` enum with `Ed25519` variant, `Display`/`FromStr`, `known_names()`, `is_known()`
+- `SignatureMetadataError` enum: `EmptyAlgorithm`, `EmptyKeyId`, `EmptySignature`, `UnsupportedAlgorithm(String)`
+- `validate_signature_metadata(&ResourceAnnouncementSignature) -> Result<(), SignatureMetadataError>` — checks non-empty algorithm/key_id/signature, known algorithm
+- `CanonicalAnnouncementPayload`, `CanonicalResourcePayload`, `CanonicalFilePayload` — typed DTOs defining what would be signed
+- `build_canonical_payload(&ResourceAnnouncement) -> Option<CanonicalAnnouncementPayload>` — deterministic canonical form: resources sorted by name, files sorted by relative_path; returns `None` when signature absent or algorithm/key_id empty
+- `check_announcement_signature_stub` updated: maps `UnsupportedAlgorithm` → `UnsupportedAlgorithm` status, other validation errors → `Invalid`, well-formed metadata → `NotChecked`
+- 21 new protocol unit tests (60 total)
+- No crypto dependencies, no cryptographic verification, no base64 validation
+- `docs/signature-metadata-model.md` — new doc
 
 ---
 
