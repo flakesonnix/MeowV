@@ -30,6 +30,23 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.3
+
+Server config for dry-run policies:
+
+- `crates/server/src/config.rs` — structured `ServerConfig` with five sections
+  (server, protocol, resources, join_gate, diagnostics)
+- `ServerConfig::load_from_path()`, `load_with_env()`, `validate()`
+- Validation rejects unsafe settings: `exact_version_required=false`,
+  `negotiation_dry_run=false`, `enforce_required_resources=true`, path traversal
+- `DiagnosticsFormat` and `JoinGateConfigMode` enums with serde deserialization
+- Server binary gains `--config <path>` CLI flag
+- `MEOWV_SERVER_BIND` and `MEOWV_TICK_RATE` env overrides preserved
+- `example.server.toml` updated to new sectioned format
+- Diagnostics prints gated on `diagnostics.print_session_diagnostics`
+- Diagnostics format switchable (`text` / `json_stub`) via config
+- 12 config unit tests
+
 ## Milestone 2.2
 
 Session diagnostics / debug dump:
