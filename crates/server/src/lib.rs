@@ -2,19 +2,19 @@ use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use protocol::{
-    build_join_gate_decision, current_protocol_profile, decode_client_line, encode_line,
-    evaluate_resource_policy, negotiate_protocol_dry_run, AnnouncedResource, AnnouncedResourceFile,
-    ClientMessage, DisconnectReason, EntityState, JoinGateDecision, JoinGateOutcome, Position,
-    ProtocolCompatibilityProfile, ProtocolNegotiationStatus, ProtocolVersionRange,
-    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation, ResourceRequirementLevel,
-    ServerMessage, PROTOCOL_VERSION,
+    AnnouncedResource, AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState,
+    JoinGateDecision, JoinGateOutcome, PROTOCOL_VERSION, Position, ProtocolCompatibilityProfile,
+    ProtocolNegotiationStatus, ProtocolVersionRange, ResourceAnnouncement, ResourceJoinDecision,
+    ResourcePolicyEvaluation, ResourceRequirementLevel, ServerMessage, build_join_gate_decision,
+    current_protocol_profile, decode_client_line, encode_line, evaluate_resource_policy,
+    negotiate_protocol_dry_run,
 };
 use resource_manifest::build_pack_index;
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    sync::{broadcast, mpsc, RwLock},
+    sync::{RwLock, broadcast, mpsc},
     task::JoinHandle,
     time,
 };
@@ -187,8 +187,7 @@ async fn handle_client(
                     },
                     capabilities: Vec::new(),
                 };
-                let negotiation =
-                    negotiate_protocol_dry_run(&client_profile, &server_profile);
+                let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
                 info!(
                     client_version = protocol_version,
                     server_version = PROTOCOL_VERSION,

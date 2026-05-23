@@ -3,20 +3,21 @@ use std::env;
 use anyhow::{Context, Result};
 use game_edition::{GameEdition, GamePlatform};
 use protocol::{
-    check_announcement_signature_stub, current_protocol_profile, decode_server_line, encode_line,
-    negotiate_protocol_dry_run, AnnouncedResource, ClientMessage, JoinGateDecision, JoinGateMode,
-    JoinGateOutcome, ProtocolCapability, ProtocolCompatibilityProfile, ProtocolVersionRange,
+    AnnouncedResource, ClientMessage, JoinGateDecision, JoinGateMode, JoinGateOutcome,
+    PROTOCOL_VERSION, ProtocolCapability, ProtocolCompatibilityProfile, ProtocolVersionRange,
     ResourceAvailabilityEntry, ResourceAvailabilityReport, ResourceAvailabilityStatus,
-    ServerMessage, SignatureVerificationStatus, PROTOCOL_VERSION,
+    ServerMessage, SignatureVerificationStatus, check_announcement_signature_stub,
+    current_protocol_profile, decode_server_line, encode_line, negotiate_protocol_dry_run,
 };
 use resource_manifest::{
+    CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind, ResourceManifest,
+    ResourceRuntimePhase, ResourceRuntimeState, ResourceRuntimeStateMachine,
     build_load_plan_from_root, build_pack_index, default_compatibility_context, discover_resources,
     evaluate_manifest_compatibility, load_manifest_from_path, resolve_load_order,
-    verify_cache_for_resource, CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind,
-    ResourceManifest, ResourceRuntimePhase, ResourceRuntimeState, ResourceRuntimeStateMachine,
+    verify_cache_for_resource,
 };
 use serde::Deserialize;
-use server_browser::{filter_current_protocol, LocalJsonServerListSource, ServerListSource};
+use server_browser::{LocalJsonServerListSource, ServerListSource, filter_current_protocol};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
@@ -166,10 +167,7 @@ async fn main() -> Result<()> {
         capabilities: vec![],
     };
     let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
-    println!(
-        "Protocol Negotiation (dry-run): {:?}",
-        negotiation.status
-    );
+    println!("Protocol Negotiation (dry-run): {:?}", negotiation.status);
     println!("  Selected Version: {:?}", negotiation.selected_version);
     println!(
         "  Shared Capabilities: {}",
