@@ -50,6 +50,7 @@
 | 3.9 | Wire signature verification into resource flow — client CLI + live path, report-only |
 | 4.0 | Strict signature enforcement gate — `SignaturePolicy`, evaluate + reject under strict, report-only by default |
 | 4.1 | Trust key UX + policy validation — `KeyConfigError`, validate config, strict requires keys, key summary |
+| 4.2 | Wire session enforcement into `handle_client` — Strict policy disconnects, ReportOnly preserved, integration tests |
 
 ---
 
@@ -277,9 +278,36 @@ Trust key UX + policy validation:
 - No downloads, no cache writes, no execution, no silent downgrade
 - `docs/strict-signature-policy.md` updated
 
----
+## Milestone 4.2
 
-## Milestone 0
+Wire session enforcement into `handle_client` (live behavioral change):
+
+- `handle_enforcement()` helper function added to `crates/server/src/lib.rs` — evaluates enforcement decision and disconnects under `Strict` policy; under `ReportOnly` logs enforcement context in diagnostics
+- `map_decision_to_disconnect()` helper maps `SessionEnforcementDecision` variants to `(DisconnectReason, String)`
+- 6 soft-failure transition points in `handle_client` now trigger enforcement under `Strict`:
+  - `on_negotiation_logged()` failure → fail session + disconnect with reason
+  - `on_resource_announcement_sent()` failure → fail session + disconnect
+  - `on_availability_report_received()` failure → fail session + disconnect
+  - `on_policy_evaluated()` non-blocked error → fail session + disconnect
+  - `on_join_gate_sent()` failure → fail session + disconnect
+  - `mark_ready_dry_run()` failure → fail session + disconnect
+- Pre-writer-task enforcement points use `send_direct()` for immediate Disconnect write
+- Post-writer-task enforcement points use `client_tx.send()` + `break` for channel-based Disconnect delivery
+- Existing hard-failure paths (non-Login first message, version mismatch, hello failure) unchanged in behavior, but diagnostics now include `.with_enforcement()` context
+- `ReadyDryRun` diagnostics also include enforcement context showing policy and Allow decision
+- All enforcement actions: record `Failed` event, update registry to `Failed`, print diagnostics with enforcement context, send `Disconnect`, return from handler (or break to normal cleanup)
+- 5 new integration tests in `tests/session_enforcement.rs`:
+  - `report_only_successful_handshake_reaches_ready_dry_run` — baseline: ReportOnly handshake succeeds
+  - `strict_successful_handshake_reaches_ready_dry_run` — Strict does not break successful path
+  - `strict_version_mismatch_disconnects` — Strict disconnects on version mismatch with `ProtocolMismatch`
+  - `strict_invalid_first_message_disconnects` — Strict disconnects on non-Login first message
+  - `strict_handshake_cleans_up_registry_on_disconnect` — registry cleaned after enforcement disconnect
+- Registry cleanup preserved via existing `SessionGuard` RAII
+- No protocol wire changes, no config redesign, no capability field changes
+- 351 total workspace tests passing (was 346)
+- `docs/live-session-enforcement.md` — new doc
+
+---
 
 Standalone prototype:
 
