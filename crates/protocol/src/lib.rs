@@ -308,6 +308,133 @@ pub fn check_announcement_signature_stub(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Protocol Compatibility Negotiation (dry-run only)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProtocolVersionRange {
+    pub min: u32,
+    pub max: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolCapability {
+    ResourceAnnouncement,
+    ResourceAvailabilityReport,
+    JoinGateDryRun,
+    ResourceCompatibilityReport,
+    SignatureMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProtocolCompatibilityProfile {
+    pub version_range: ProtocolVersionRange,
+    pub capabilities: Vec<ProtocolCapability>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolNegotiationStatus {
+    ExactMatch,
+    CompatibleDryRun,
+    Incompatible,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProtocolNegotiationResult {
+    pub status: ProtocolNegotiationStatus,
+    pub selected_version: Option<u32>,
+    pub shared_capabilities: Vec<ProtocolCapability>,
+    pub reason: String,
+}
+
+pub fn current_protocol_profile() -> ProtocolCompatibilityProfile {
+    ProtocolCompatibilityProfile {
+        version_range: ProtocolVersionRange {
+            min: PROTOCOL_VERSION,
+            max: PROTOCOL_VERSION,
+        },
+        capabilities: vec![
+            ProtocolCapability::ResourceAnnouncement,
+            ProtocolCapability::ResourceAvailabilityReport,
+            ProtocolCapability::JoinGateDryRun,
+            ProtocolCapability::ResourceCompatibilityReport,
+            ProtocolCapability::SignatureMetadata,
+        ],
+    }
+}
+
+pub fn protocol_ranges_overlap(a: &ProtocolVersionRange, b: &ProtocolVersionRange) -> bool {
+    a.min <= b.max && b.min <= a.max
+}
+
+pub fn negotiate_protocol_dry_run(
+    client: &ProtocolCompatibilityProfile,
+    server: &ProtocolCompatibilityProfile,
+) -> ProtocolNegotiationResult {
+    let overlap = protocol_ranges_overlap(&client.version_range, &server.version_range);
+
+    if !overlap {
+        return ProtocolNegotiationResult {
+            status: ProtocolNegotiationStatus::Incompatible,
+            selected_version: None,
+            shared_capabilities: Vec::new(),
+            reason: "no overlapping protocol version range".to_string(),
+        };
+    }
+
+    let contains_current = client.version_range.min <= PROTOCOL_VERSION
+        && client.version_range.max >= PROTOCOL_VERSION
+        && server.version_range.min <= PROTOCOL_VERSION
+        && server.version_range.max >= PROTOCOL_VERSION;
+
+    if contains_current {
+        let mut shared: Vec<ProtocolCapability> = client
+            .capabilities
+            .iter()
+            .filter(|c| server.capabilities.contains(c))
+            .cloned()
+            .collect();
+        shared.sort();
+        shared.dedup();
+
+        return ProtocolNegotiationResult {
+            status: ProtocolNegotiationStatus::ExactMatch,
+            selected_version: Some(PROTOCOL_VERSION),
+            shared_capabilities: shared,
+            reason: "both profiles include the current protocol version".to_string(),
+        };
+    }
+
+    let highest_shared = std::cmp::max(client.version_range.min, server.version_range.min)
+        ..=std::cmp::min(client.version_range.max, server.version_range.max);
+    let selected_version = highest_shared
+        .into_iter()
+        .max()
+        .expect("overlap guarantees at least one version");
+
+    let mut shared: Vec<ProtocolCapability> = client
+        .capabilities
+        .iter()
+        .filter(|c| server.capabilities.contains(c))
+        .cloned()
+        .collect();
+    shared.sort();
+    shared.dedup();
+
+    ProtocolNegotiationResult {
+        status: ProtocolNegotiationStatus::CompatibleDryRun,
+        selected_version: Some(selected_version),
+        shared_capabilities: shared,
+        reason: format!(
+            "compatible dry-run only: highest shared version is {}, not active",
+            selected_version
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +740,184 @@ mod tests {
             evaluation.missing_required,
             vec!["alpha:a.txt", "beta:b.txt"]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Protocol negotiation tests
+    // -----------------------------------------------------------------------
+
+    fn current_profile() -> super::ProtocolCompatibilityProfile {
+        ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange {
+                min: PROTOCOL_VERSION,
+                max: PROTOCOL_VERSION,
+            },
+            capabilities: vec![
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::ResourceAvailabilityReport,
+                ProtocolCapability::JoinGateDryRun,
+                ProtocolCapability::ResourceCompatibilityReport,
+                ProtocolCapability::SignatureMetadata,
+            ],
+        }
+    }
+
+    #[test]
+    fn negotiate_exact_current_protocol_match() {
+        let client = current_profile();
+        let server = current_profile();
+        let result = negotiate_protocol_dry_run(&client, &server);
+        assert_eq!(result.status, ProtocolNegotiationStatus::ExactMatch);
+        assert_eq!(result.selected_version, Some(PROTOCOL_VERSION));
+        assert!(result.reason.contains("current protocol version"));
+    }
+
+    #[test]
+    fn negotiate_compatible_dry_run_overlap() {
+        let client = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 0, max: 2 },
+            capabilities: vec![ProtocolCapability::ResourceAnnouncement],
+        };
+        let server = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 2, max: 3 },
+            capabilities: vec![
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::JoinGateDryRun,
+            ],
+        };
+        let result = negotiate_protocol_dry_run(&client, &server);
+        assert_eq!(result.status, ProtocolNegotiationStatus::CompatibleDryRun);
+        assert_eq!(result.selected_version, Some(2));
+        assert!(result.reason.contains("dry-run"));
+    }
+
+    #[test]
+    fn negotiate_incompatible_no_overlap() {
+        let client = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 5, max: 10 },
+            capabilities: vec![],
+        };
+        let server = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 1, max: 3 },
+            capabilities: vec![],
+        };
+        let result = negotiate_protocol_dry_run(&client, &server);
+        assert_eq!(result.status, ProtocolNegotiationStatus::Incompatible);
+        assert_eq!(result.selected_version, None);
+    }
+
+    #[test]
+    fn negotiate_selects_highest_shared_version() {
+        let client = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 1, max: 5 },
+            capabilities: vec![],
+        };
+        let server = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 3, max: 7 },
+            capabilities: vec![],
+        };
+        let result = negotiate_protocol_dry_run(&client, &server);
+        assert_eq!(result.status, ProtocolNegotiationStatus::CompatibleDryRun);
+        assert_eq!(result.selected_version, Some(5));
+    }
+
+    #[test]
+    fn negotiate_capability_intersection_deterministic() {
+        let client = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 0, max: 1 },
+            capabilities: vec![
+                ProtocolCapability::JoinGateDryRun,
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::SignatureMetadata,
+            ],
+        };
+        let server = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 0, max: 1 },
+            capabilities: vec![
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::JoinGateDryRun,
+            ],
+        };
+        let result = negotiate_protocol_dry_run(&client, &server);
+        assert_eq!(
+            result.shared_capabilities,
+            vec![
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::JoinGateDryRun,
+            ]
+        );
+    }
+
+    #[test]
+    fn negotiate_no_shared_capabilities() {
+        let client = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 0, max: 2 },
+            capabilities: vec![ProtocolCapability::JoinGateDryRun],
+        };
+        let server = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 0, max: 2 },
+            capabilities: vec![ProtocolCapability::ResourceAnnouncement],
+        };
+        let result = negotiate_protocol_dry_run(&client, &server);
+        assert!(result.shared_capabilities.is_empty());
+    }
+
+    #[test]
+    fn protocol_ranges_overlap_true() {
+        assert!(protocol_ranges_overlap(
+            &ProtocolVersionRange { min: 1, max: 3 },
+            &ProtocolVersionRange { min: 2, max: 4 },
+        ));
+        assert!(protocol_ranges_overlap(
+            &ProtocolVersionRange { min: 2, max: 2 },
+            &ProtocolVersionRange { min: 2, max: 2 },
+        ));
+    }
+
+    #[test]
+    fn protocol_ranges_overlap_false() {
+        assert!(!protocol_ranges_overlap(
+            &ProtocolVersionRange { min: 1, max: 2 },
+            &ProtocolVersionRange { min: 3, max: 4 },
+        ));
+    }
+
+    #[test]
+    fn protocol_compatibility_profile_serializes_deserializes() {
+        let profile = current_profile();
+        let json = serde_json::to_string(&profile).unwrap();
+        let decoded: ProtocolCompatibilityProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, profile);
+    }
+
+    #[test]
+    fn protocol_negotiation_result_serializes_deserializes() {
+        let result = negotiate_protocol_dry_run(&current_profile(), &current_profile());
+        let json = serde_json::to_string(&result).unwrap();
+        let decoded: ProtocolNegotiationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, result);
+    }
+
+    #[test]
+    fn exact_match_result_has_current_version() {
+        let result = negotiate_protocol_dry_run(
+            &ProtocolCompatibilityProfile {
+                version_range: ProtocolVersionRange {
+                    min: PROTOCOL_VERSION,
+                    max: PROTOCOL_VERSION,
+                },
+                capabilities: vec![],
+            },
+            &ProtocolCompatibilityProfile {
+                version_range: ProtocolVersionRange {
+                    min: PROTOCOL_VERSION,
+                    max: PROTOCOL_VERSION,
+                },
+                capabilities: vec![],
+            },
+        );
+        assert_eq!(result.status, ProtocolNegotiationStatus::ExactMatch);
+        assert_eq!(result.selected_version, Some(PROTOCOL_VERSION));
     }
 
     fn sample_announcement(requirement_level: ResourceRequirementLevel) -> ResourceAnnouncement {
