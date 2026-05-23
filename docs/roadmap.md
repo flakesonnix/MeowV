@@ -20,6 +20,15 @@ Protocol hardening:
 - better config files
 - integration tests
 
+## Milestone 1.0
+
+Resource registry:
+
+- multi-resource discovery
+- dependency validation
+- cycle detection
+- deterministic load order
+
 ## Milestone 1.1
 
 Protocol compatibility work:
