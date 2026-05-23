@@ -1,3 +1,5 @@
+use crate::enforcement::SessionEnforcementPolicy;
+use protocol::signature_engine::SignaturePolicy;
 use protocol::PROTOCOL_VERSION;
 
 use crate::config::{JoinGateConfigMode, ServerConfig};
@@ -20,6 +22,8 @@ pub struct ServerRuntimeStatus {
     pub resource_announcement_dir: String,
     pub diagnostics_enabled: bool,
     pub admin_stdin_enabled: bool,
+    pub session_enforcement: String,
+    pub signature_policy: String,
 }
 
 impl ServerRuntimeStatus {
@@ -42,6 +46,14 @@ impl ServerRuntimeStatus {
             resource_announcement_dir: config.resources.announcement_resource_dir.clone(),
             diagnostics_enabled: config.diagnostics.print_session_diagnostics,
             admin_stdin_enabled: config.admin.local_stdin_enabled,
+            session_enforcement: match config.enforcement.mode {
+                SessionEnforcementPolicy::ReportOnly => "report_only".to_string(),
+                SessionEnforcementPolicy::Strict => "strict".to_string(),
+            },
+            signature_policy: match config.signature.policy {
+                SignaturePolicy::ReportOnly => "report_only".to_string(),
+                SignaturePolicy::Strict => "strict".to_string(),
+            },
         }
     }
 
@@ -73,7 +85,9 @@ impl ServerRuntimeStatus {
              failed_sessions: {}\n\
              resource_announcement_dir: {}\n\
              diagnostics_enabled: {}\n\
-             admin_stdin_enabled: {}",
+             admin_stdin_enabled: {}\n\
+             session_enforcement: {}\n\
+             signature_policy: {}",
             self.server_name,
             self.bind_addr,
             self.protocol_version,
@@ -87,6 +101,8 @@ impl ServerRuntimeStatus {
             self.resource_announcement_dir,
             self.diagnostics_enabled,
             self.admin_stdin_enabled,
+            self.session_enforcement,
+            self.signature_policy,
         )
     }
 }
@@ -113,6 +129,8 @@ mod tests {
         assert!(!status.resource_announcement_dir.is_empty());
         assert!(status.diagnostics_enabled);
         assert!(!status.admin_stdin_enabled);
+        assert_eq!(status.session_enforcement, "report_only");
+        assert_eq!(status.signature_policy, "report_only");
     }
 
     #[test]
@@ -130,6 +148,8 @@ mod tests {
         assert!(text.contains("negotiation_dry_run: true"));
         assert!(text.contains("capability_gates_report_only: true"));
         assert!(text.contains("join_gate_mode: dry_run"));
+        assert!(text.contains("session_enforcement: report_only"));
+        assert!(text.contains("signature_policy: report_only"));
     }
 
     #[test]

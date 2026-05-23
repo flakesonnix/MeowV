@@ -31,6 +31,28 @@ pub fn evaluate_signature_policy(
 | Unknown key ID | Ok | Err |
 | Unsupported algorithm | Ok | Err |
 
+## Key Config Validation
+
+Before any verification, the trusted key config is validated:
+
+```rust
+pub fn validate_trusted_key_config(keys: &[TrustedPublicKey]) -> Result<(), KeyConfigError>
+```
+
+| Condition | Error |
+|-----------|-------|
+| Empty key list | `EmptyConfig` |
+| Duplicate `key_id` | `DuplicateKeyId` |
+| Unsupported algorithm (not `"ed25519"`) | `UnsupportedAlgorithm` |
+| Wrong public key length for ed25519 | `MalformedKeyMaterial` |
+
+### Error Output
+
+- **ReportOnly + no keys**: informational warning, proceeds normally
+- **Strict + no keys**: hard error, exits before connecting
+- **Strict + malformed keys**: hard error during key loading
+- **Strict + empty keys**: hard error after loading
+
 ## CLI Usage
 
 ```sh
@@ -45,6 +67,18 @@ cargo run --bin client -- \
   --trusted-keys keys.toml \
   --signature-policy strict \
   --addr 127.0.0.1:7000
+
+# ReportOnly warns when no keys
+cargo run --bin client -- --addr 127.0.0.1:7000
+# info: no trusted keys configured — signature verification will not be available.
+```
+
+## Trusted Keys Summary
+
+When keys are loaded, a summary line is printed:
+
+```
+Trusted keys loaded: 2 key(s) — [dev-key, prod-key]
 ```
 
 ## Enforcement Behaviour

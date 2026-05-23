@@ -1,7 +1,9 @@
 use std::net::SocketAddr;
 use std::path::Path;
 
+use crate::enforcement::SessionEnforcementPolicy;
 use anyhow::Context;
+use protocol::signature_engine::SignaturePolicy;
 use protocol::PROTOCOL_VERSION;
 use serde::Deserialize;
 
@@ -217,6 +219,38 @@ impl Default for AdminSection {
     }
 }
 
+// --- Section: [enforcement] ---
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct EnforcementSection {
+    pub mode: SessionEnforcementPolicy,
+}
+
+impl Default for EnforcementSection {
+    fn default() -> Self {
+        Self {
+            mode: SessionEnforcementPolicy::ReportOnly,
+        }
+    }
+}
+
+// --- Section: [signature] ---
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SignatureSection {
+    pub policy: SignaturePolicy,
+}
+
+impl Default for SignatureSection {
+    fn default() -> Self {
+        Self {
+            policy: SignaturePolicy::ReportOnly,
+        }
+    }
+}
+
 // --- Top-level config ---
 
 #[derive(Debug, Clone, Deserialize)]
@@ -229,6 +263,8 @@ pub struct ServerConfig {
     pub diagnostics: DiagnosticsSection,
     pub logging: LoggingSection,
     pub admin: AdminSection,
+    pub enforcement: EnforcementSection,
+    pub signature: SignatureSection,
 }
 
 impl Default for ServerConfig {
@@ -241,6 +277,8 @@ impl Default for ServerConfig {
             diagnostics: DiagnosticsSection::default(),
             logging: LoggingSection::default(),
             admin: AdminSection::default(),
+            enforcement: EnforcementSection::default(),
+            signature: SignatureSection::default(),
         }
     }
 }
@@ -324,6 +362,14 @@ join gate enforcement is not yet supported"
     /// Deterministic multi-line summary of the server's lifecycle configuration.
     /// Logged at startup. Contains no IP addresses, personal data, or timestamps.
     pub fn to_lifecycle_summary_text(&self) -> String {
+        let enforce_mode = match &self.enforcement.mode {
+            SessionEnforcementPolicy::ReportOnly => "report_only",
+            SessionEnforcementPolicy::Strict => "strict",
+        };
+        let sig_policy = match &self.signature.policy {
+            SignaturePolicy::ReportOnly => "report_only",
+            SignaturePolicy::Strict => "strict",
+        };
         format!(
             "server_name: {}\n\
              bind_addr: {}\n\
@@ -338,7 +384,9 @@ join gate enforcement is not yet supported"
              diagnostics_format: {}\n\
              admin_stdin: {}\n\
              log_level: {}\n\
-             log_format: {}",
+             log_format: {}\n\
+             session_enforcement: {enforce_mode}\n\
+             signature_policy: {sig_policy}",
             self.server.name,
             self.server.bind_addr,
             PROTOCOL_VERSION,
@@ -622,6 +670,35 @@ tick_rate = 20
         assert!(text.contains("capability_gates_report_only: true"));
         assert!(text.contains("join_gate_mode: dry_run"));
         assert!(text.contains("join_gate_enforcement: disabled"));
+    }
+
+    #[test]
+    fn lifecycle_summary_includes_enforcement_and_signature() {
+        let text = ServerConfig::default().to_lifecycle_summary_text();
+        assert!(text.contains("session_enforcement: report_only"));
+        assert!(text.contains("signature_policy: report_only"));
+    }
+
+    #[test]
+    fn strict_enforcement_in_lifecycle_summary() {
+        let toml = r#"
+[enforcement]
+mode = "strict"
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        let text = cfg.to_lifecycle_summary_text();
+        assert!(text.contains("session_enforcement: strict"));
+    }
+
+    #[test]
+    fn strict_signature_in_lifecycle_summary() {
+        let toml = r#"
+[signature]
+policy = "strict"
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        let text = cfg.to_lifecycle_summary_text();
+        assert!(text.contains("signature_policy: strict"));
     }
 
     #[test]

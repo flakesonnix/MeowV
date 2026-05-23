@@ -60,3 +60,15 @@ show_targets = false
 # resources, diagnostics, quit. No network exposure. No authentication required
 # (local process only). Disabled by default.
 local_stdin_enabled = false
+
+[enforcement]
+# Session enforcement policy. "report_only" (default) logs enforcement decisions
+# but never disconnects. "strict" disconnects clients with invalid handshake
+# or session flows.
+mode = "report_only"
+
+[signature]
+# Resource announcement signature verification policy. "report_only" (default)
+# logs signature status but never rejects. "strict" rejects unsigned or invalid
+# signatures.
+policy = "report_only"
