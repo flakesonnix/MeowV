@@ -47,6 +47,7 @@
 | 3.6 | Signature metadata model — typed algorithm enum, structural validation, canonical payload |
 | 3.7 | Signature verification dry-run planner — deterministic plan/report from metadata + trust policy |
 | 3.8 | Signature verification engine — real Ed25519 crypto, consumes M3.7 plan, report-only |
+| 3.9 | Wire signature verification into resource flow — client CLI + live path, report-only |
 
 ---
 
@@ -208,6 +209,21 @@ Signature verification engine (real Ed25519 crypto):
 - 14 new signature engine unit tests (90 protocol tests total)
 - No enforcement, no disconnects, no downloads, no cache writes
 - `docs/signature-verification-engine.md` — new doc
+
+## Milestone 3.9
+
+Wire signature verification into resource flow (report-only):
+
+- Client gains `--verify-announcement-signature <path>` CLI flag — offline inspection of a JSON `ResourceAnnouncement` with optional `--trusted-keys <path>` and `--reject-unsigned` flags
+- Output shows both the M3.7 verification plan and the M3.8 engine report
+- Live `ResourceAnnouncement` handler uses engine when `trusted_keys_file` is configured in client config; otherwise falls back to stub
+- `TrustedKeyEntry` deserialization from TOML — `key_id`, `algorithm`, `public_key_b64`
+- `load_trusted_keys(path) -> Result<Vec<TrustedPublicKey>>` — pure I/O helper
+- `MEOWV_TRUSTED_KEYS` env var support
+- 5 new end-to-end protocol tests (95 protocol tests total)
+- 300 workspace tests passing
+- No enforcement, no disconnects, no downloads, no cache writes
+- `docs/signature-verification-reporting.md` — new doc
 
 ---
 
