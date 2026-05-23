@@ -51,9 +51,35 @@ struct ClientInfo {
     shared_caps: Vec<ProtocolCapability>,
 }
 
-#[derive(Default)]
 struct SharedState {
     clients: RwLock<HashMap<Uuid, ClientInfo>>,
+    registry: Arc<std::sync::Mutex<session_registry::SessionRegistry>>,
+}
+
+impl Default for SharedState {
+    fn default() -> Self {
+        Self {
+            clients: RwLock::default(),
+            registry: Arc::new(std::sync::Mutex::new(
+                session_registry::SessionRegistry::new(),
+            )),
+        }
+    }
+}
+
+/// RAII guard: removes the session from the registry when dropped.
+/// Handles cleanup on all exit paths including early returns via `?`.
+struct SessionGuard {
+    id: session_registry::SessionId,
+    registry: Arc<std::sync::Mutex<session_registry::SessionRegistry>>,
+}
+
+impl Drop for SessionGuard {
+    fn drop(&mut self) {
+        if let Ok(mut reg) = self.registry.lock() {
+            reg.remove_session(&self.id);
+        }
+    }
 }
 
 pub async fn run(config: ServerConfig) -> Result<()> {
@@ -75,7 +101,7 @@ pub async fn run_with_listener(listener: TcpListener, config: ServerConfig) -> R
 
     if config.admin.local_stdin_enabled {
         let (quit_tx, quit_rx) = oneshot::channel::<()>();
-        tokio::spawn(admin_stdin_loop(quit_tx, config.clone()));
+        tokio::spawn(admin_stdin_loop(quit_tx, config.clone(), state.clone()));
         tokio::select! {
             result = accept_loop(&listener, state, tx, &config) => result,
             _ = quit_rx => {
@@ -110,10 +136,13 @@ async fn accept_loop(
     }
 }
 
-async fn admin_stdin_loop(quit_tx: oneshot::Sender<()>, config: ServerConfig) {
+async fn admin_stdin_loop(
+    quit_tx: oneshot::Sender<()>,
+    config: ServerConfig,
+    state: Arc<SharedState>,
+) {
     use admin::{AdminCommandParseError, handle_admin_command_with_status, parse_admin_command};
 
-    let snap = status::ServerRuntimeStatus::from_config(&config);
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
     let mut line = String::new();
@@ -124,7 +153,14 @@ async fn admin_stdin_loop(quit_tx: oneshot::Sender<()>, config: ServerConfig) {
             Ok(0) | Err(_) => break,
             Ok(_) => match parse_admin_command(&line) {
                 Ok(cmd) => {
-                    let result = handle_admin_command_with_status(cmd, Some(&snap));
+                    let reg_snap = state.registry.lock().unwrap().snapshot();
+                    let current_status = status::ServerRuntimeStatus::from_config(&config)
+                        .with_session_counts(
+                            reg_snap.connected_sessions,
+                            reg_snap.ready_dry_run_sessions,
+                            reg_snap.failed_sessions,
+                        );
+                    let result = handle_admin_command_with_status(cmd, Some(&current_status));
                     info!(message = %result.message, "admin");
                     if result.should_quit {
                         let _ = quit_tx.send(());
@@ -219,6 +255,13 @@ async fn handle_client(
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ServerMessage>();
     let mut session = SessionStateMachine::new();
     let mut event_log = SessionEventLog::new();
+
+    let session_id = state.registry.lock().unwrap().create_session();
+    let _session_guard = SessionGuard {
+        id: session_id,
+        registry: state.registry.clone(),
+    };
+
     event_log.record(
         SessionEventKind::Connected,
         SessionState::Connected,
@@ -239,6 +282,11 @@ async fn handle_client(
                         SessionState::HelloReceived,
                         format!("login from {name}"),
                     );
+                    state.registry.lock().unwrap().update_session(
+                        &session_id,
+                        session.state().clone(),
+                        event_log.len(),
+                    );
                     info!(%client_id, state = ?session.state(), "session: hello received");
                 }
 
@@ -249,6 +297,11 @@ async fn handle_client(
                         format!(
                             "protocol mismatch: client={protocol_version} server={PROTOCOL_VERSION}"
                         ),
+                    );
+                    state.registry.lock().unwrap().update_session(
+                        &session_id,
+                        session.state().clone(),
+                        event_log.len(),
                     );
                     if config.diagnostics.print_session_diagnostics {
                         let diag = SessionDiagnostics::from_parts(&session, &event_log);
@@ -275,6 +328,11 @@ async fn handle_client(
                     SessionEventKind::VersionChecked,
                     SessionState::VersionChecked,
                     format!("protocol version {protocol_version} matched"),
+                );
+                state.registry.lock().unwrap().update_session(
+                    &session_id,
+                    session.state().clone(),
+                    event_log.len(),
                 );
                 info!(%client_id, state = ?session.state(), "session: version checked");
 
@@ -310,6 +368,11 @@ async fn handle_client(
                         SessionEventKind::ProtocolNegotiationDryRun,
                         SessionState::NegotiationDryRunLogged,
                         format!("negotiation status: {:?}", negotiation.status),
+                    );
+                    state.registry.lock().unwrap().update_session(
+                        &session_id,
+                        session.state().clone(),
+                        event_log.len(),
                     );
                     info!(%client_id, state = ?session.state(), "session: negotiation dry-run logged");
                 }
@@ -386,6 +449,11 @@ async fn handle_client(
                 SessionState::ResourceAnnouncementSent,
                 "resource announcement sent to client",
             );
+            state.registry.lock().unwrap().update_session(
+                &session_id,
+                session.state().clone(),
+                event_log.len(),
+            );
             info!(%client_id, state = ?session.state(), "session: resource announcement sent");
         }
     }
@@ -460,6 +528,11 @@ async fn handle_client(
                             SessionState::AvailabilityReportReceived,
                             "resource availability report received from client",
                         );
+                        state.registry.lock().unwrap().update_session(
+                            &session_id,
+                            session.state().clone(),
+                            event_log.len(),
+                        );
                         info!(%client_id, state = ?session.state(), "session: availability report received");
                     }
 
@@ -475,6 +548,11 @@ async fn handle_client(
                                 SessionState::ResourcePolicyEvaluated,
                                 format!("policy decision: {:?}", policy_decision),
                             );
+                            state.registry.lock().unwrap().update_session(
+                                &session_id,
+                                session.state().clone(),
+                                event_log.len(),
+                            );
                             info!(%client_id, state = ?session.state(), "session: resource policy evaluated");
                         }
                         Err(SessionStateError::PolicyBlockedDryRun) => {
@@ -485,6 +563,11 @@ async fn handle_client(
                                     "policy decision: {:?} (dry-run, not enforced)",
                                     policy_decision
                                 ),
+                            );
+                            state.registry.lock().unwrap().update_session(
+                                &session_id,
+                                session.state().clone(),
+                                event_log.len(),
                             );
                             info!(
                                 %client_id,
@@ -521,6 +604,11 @@ async fn handle_client(
                             SessionState::JoinGateDryRunSent,
                             "join gate dry-run decision sent to client",
                         );
+                        state.registry.lock().unwrap().update_session(
+                            &session_id,
+                            session.state().clone(),
+                            event_log.len(),
+                        );
                         info!(%client_id, state = ?session.state(), "session: join gate dry-run sent");
                     }
 
@@ -531,6 +619,11 @@ async fn handle_client(
                             SessionEventKind::ReadyDryRun,
                             SessionState::ReadyDryRun,
                             "handshake pipeline complete (dry-run)",
+                        );
+                        state.registry.lock().unwrap().update_session(
+                            &session_id,
+                            session.state().clone(),
+                            event_log.len(),
                         );
                         info!(%client_id, state = ?session.state(), "session: ready (dry-run)");
                         if config.diagnostics.print_session_diagnostics {
@@ -556,6 +649,11 @@ async fn handle_client(
     });
 
     writer_task.abort();
+    state
+        .registry
+        .lock()
+        .unwrap()
+        .update_session_event_count(&session_id, event_log.len());
     info!(
         %client_id,
         event_count = event_log.len(),
