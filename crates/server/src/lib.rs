@@ -1,7 +1,10 @@
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use protocol::{decode_client_line, encode_line, ClientMessage, EntityState, Position, ServerMessage};
+use protocol::{
+    decode_client_line, encode_line, ClientMessage, DisconnectReason, EntityState, Position,
+    ServerMessage, PROTOCOL_VERSION,
+};
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -151,11 +154,31 @@ async fn handle_client(
     let mut rx = tx.subscribe();
     let name = match lines.next_line().await? {
         Some(line) => match decode_client_line(&line)? {
-            ClientMessage::Login { name } => name,
+            ClientMessage::Login {
+                name,
+                protocol_version,
+            } => {
+                if protocol_version != PROTOCOL_VERSION {
+                    send_direct(
+                        &mut writer_half,
+                        &ServerMessage::Disconnect {
+                            reason: DisconnectReason::ProtocolMismatch,
+                            message: format!(
+                                "protocol mismatch: client={protocol_version} server={PROTOCOL_VERSION}"
+                            ),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+
+                name
+            }
             _ => {
                 send_direct(
                     &mut writer_half,
-                    &ServerMessage::Error {
+                    &ServerMessage::Disconnect {
+                        reason: DisconnectReason::InvalidHandshake,
                         message: "first packet must be login".to_string(),
                     },
                 )
@@ -179,6 +202,7 @@ async fn handle_client(
         &ServerMessage::Welcome {
             client_id,
             motd: config.motd,
+            protocol_version: PROTOCOL_VERSION,
         },
     )
     .await?;

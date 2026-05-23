@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const PROTOCOL_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub x: f32,
@@ -19,16 +21,25 @@ pub struct EntityState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    Login { name: String },
+    Login { name: String, protocol_version: u32 },
     Chat { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DisconnectReason {
+    ProtocolMismatch,
+    InvalidHandshake,
+    ClientClosed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    Welcome { client_id: Uuid, motd: String },
+    Welcome { client_id: Uuid, motd: String, protocol_version: u32 },
     ChatBroadcast { from: String, message: String },
     EntitySnapshot { entities: Vec<EntityState> },
+    Disconnect { reason: DisconnectReason, message: String },
     Error { message: String },
 }
 
