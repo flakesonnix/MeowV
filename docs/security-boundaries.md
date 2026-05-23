@@ -61,20 +61,20 @@ planned milestones.
 
 ## Enforcement Model
 
-All policy decisions are currently dry-run or report-only:
+All policy decisions are currently dry-run or report-only by default. One
+gate supports opt-in strict enforcement:
 
-| Gate | Current Behaviour |
-|---|---|
-| Protocol version | Enforced — mismatch causes disconnect |
-| Protocol negotiation | Not enforced — logged only |
-| Join gate | Not enforced — logged only |
-| Capability requirements | Not enforced — logged only |
-| Resource compatibility | Not enforced — reported only |
-| Announcement signatures | Not verified — stub only; design spec at `docs/signature-verification-design.md` |
+| Gate | Default | Strict Mode |
+|---|---|---|
+| Protocol version | Enforced — mismatch causes disconnect | Always enforced |
+| Protocol negotiation | Not enforced — logged only | N/A |
+| Join gate | Not enforced — logged only | N/A |
+| Capability requirements | Not enforced — logged only | N/A |
+| Resource compatibility | Not enforced — reported only | N/A |
+| Announcement signatures | Report-only — printed only | `--signature-policy strict` rejects invalid/unsigned announcements |
 
-A future milestone may activate enforcement for specific gates, but each
-activation will require its own milestone, explicit config gating, and a
-security review.
+Enforcement activation requires explicit opt-in (`--signature-policy strict`
+or equivalent config). The default `report-only` mode never rejects.
 
 ## Config Safety
 

@@ -48,6 +48,7 @@
 | 3.7 | Signature verification dry-run planner — deterministic plan/report from metadata + trust policy |
 | 3.8 | Signature verification engine — real Ed25519 crypto, consumes M3.7 plan, report-only |
 | 3.9 | Wire signature verification into resource flow — client CLI + live path, report-only |
+| 4.0 | Strict signature enforcement gate — `SignaturePolicy`, evaluate + reject under strict, report-only by default |
 
 ---
 
@@ -224,6 +225,23 @@ Wire signature verification into resource flow (report-only):
 - 300 workspace tests passing
 - No enforcement, no disconnects, no downloads, no cache writes
 - `docs/signature-verification-reporting.md` — new doc
+
+## Milestone 4.0
+
+Strict signature enforcement gate:
+
+- `SignaturePolicy` enum: `ReportOnly` (default) / `Strict`
+- `SignaturePolicyViolation` struct with `message: String`
+- `evaluate_signature_policy(&VerificationReport, &SignaturePolicy) -> Result<(), SignaturePolicyViolation>` — pure function
+- Strict policy rejects when engine report is not `all_valid()`: unsigned announcements, invalid signatures, unknown key IDs, unsupported algorithms
+- ReportOnly policy never rejects (returns `Ok`)
+- Client `--signature-policy strict` CLI flag + `SignaturePolicy` used in both offline and live paths
+- Live path under strict: violation → error print + break out of read loop (no availability report sent)
+- CLI path under strict: violation → error print + `anyhow::bail!`
+- 7 new protocol unit tests (102 protocol tests total)
+- 307 workspace tests passing
+- No downloads, no cache writes, no execution, no silent fallback
+- `docs/strict-signature-policy.md` — new doc
 
 ---
 
