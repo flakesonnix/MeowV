@@ -1,3 +1,4 @@
+mod diagnostics;
 mod event_log;
 mod session;
 
