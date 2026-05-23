@@ -101,6 +101,12 @@ pub fn init_logging(logging: &LoggingSection) {
                 .try_init();
         }
     }
+    info!(
+        level = logging.level.as_str(),
+        format = ?logging.format,
+        show_targets = logging.show_targets,
+        "logging initialized"
+    );
 }
 
 fn spawn_tick_loop(

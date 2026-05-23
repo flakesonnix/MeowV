@@ -43,3 +43,13 @@ print_session_diagnostics = true
 print_event_log = false
 # Diagnostics output format: "text" or "json_stub".
 format = "text"
+
+[logging]
+# Minimum log level. One of: "trace", "debug", "info", "warn", "error".
+# RUST_LOG env var takes precedence over this setting.
+level = "info"
+# Log output format. "text" for human-readable output; "json" for
+# machine-readable newline-delimited JSON.
+format = "text"
+# Include the Rust module target in each log line.
+show_targets = false
