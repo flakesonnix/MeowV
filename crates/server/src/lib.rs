@@ -2,6 +2,7 @@ mod diagnostics;
 mod event_log;
 mod session;
 
+use diagnostics::SessionDiagnostics;
 use event_log::{SessionEventKind, SessionEventLog};
 use session::{SessionState, SessionStateError, SessionStateMachine};
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
@@ -200,6 +201,8 @@ async fn handle_client(
                             "protocol mismatch: client={protocol_version} server={PROTOCOL_VERSION}"
                         ),
                     );
+                    let diag = SessionDiagnostics::from_parts(&session, &event_log);
+                    info!(%client_id, "session diagnostics (failed):\n{}", diag.to_text());
                     send_direct(
                         &mut writer_half,
                         &ServerMessage::Disconnect {
@@ -473,6 +476,8 @@ async fn handle_client(
                             "handshake pipeline complete (dry-run)",
                         );
                         info!(%client_id, state = ?session.state(), "session: ready (dry-run)");
+                        let diag = SessionDiagnostics::from_parts(&session, &event_log);
+                        info!(%client_id, "session diagnostics:\n{}", diag.to_text());
                     }
                 } else {
                     warn!(%client_id, "resource availability report received before announcement was stored");
