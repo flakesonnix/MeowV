@@ -2,8 +2,10 @@ use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use protocol::{
-    decode_client_line, encode_line, AnnouncedResource, AnnouncedResourceFile, ClientMessage,
-    DisconnectReason, EntityState, Position, ResourceAnnouncement, ServerMessage, PROTOCOL_VERSION,
+    decode_client_line, encode_line, evaluate_resource_policy, AnnouncedResource,
+    AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState, Position,
+    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation, ResourceRequirementLevel,
+    ServerMessage, PROTOCOL_VERSION,
 };
 use resource_manifest::build_pack_index;
 use serde::Deserialize;
@@ -60,6 +62,7 @@ impl ServerConfig {
 struct ClientInfo {
     name: String,
     entity_id: u32,
+    last_announcement: Option<ResourceAnnouncement>,
 }
 
 #[derive(Default)]
@@ -195,6 +198,7 @@ async fn handle_client(
         ClientInfo {
             name: name.clone(),
             entity_id,
+            last_announcement: build_example_resource_announcement(),
         },
     );
 
@@ -208,7 +212,13 @@ async fn handle_client(
     )
     .await?;
 
-    if let Some(announcement) = build_example_resource_announcement() {
+    if let Some(announcement) = state
+        .clients
+        .read()
+        .await
+        .get(&client_id)
+        .and_then(|client| client.last_announcement.clone())
+    {
         send_direct(
             &mut writer_half,
             &ServerMessage::ResourceAnnouncement(announcement),
@@ -254,11 +264,19 @@ async fn handle_client(
                 let _ = tx.send(ServerMessage::ChatBroadcast { from, message });
             }
             ClientMessage::ResourceAvailabilityReport(report) => {
-                info!(
-                    fully_available = report.is_fully_available,
-                    entries = report.resources.len(),
-                    "client resource availability received"
-                );
+                let announcement = state
+                    .clients
+                    .read()
+                    .await
+                    .get(&client_id)
+                    .and_then(|client| client.last_announcement.clone());
+
+                if let Some(announcement) = announcement {
+                    let evaluation = evaluate_resource_policy(&announcement, &report);
+                    log_resource_policy_evaluation(client_id, &evaluation);
+                } else {
+                    warn!(%client_id, "resource availability report received before announcement was stored");
+                }
             }
         }
     }
@@ -303,6 +321,27 @@ fn build_example_resource_announcement() -> Option<ResourceAnnouncement> {
             version: index.manifest.version,
             files,
             protocol_version: index.manifest.protocol_version,
+            requirement_level: ResourceRequirementLevel::Required,
         }],
     })
+}
+
+fn log_resource_policy_evaluation(client_id: Uuid, evaluation: &ResourcePolicyEvaluation) {
+    let decision = match evaluation.decision {
+        ResourceJoinDecision::Allowed => "allowed",
+        ResourceJoinDecision::Blocked => "blocked",
+        ResourceJoinDecision::WarningOnly => "warning_only",
+    };
+
+    info!(
+        %client_id,
+        decision,
+        missing_required = evaluation.missing_required.len(),
+        invalid_required = evaluation.invalid_required.len(),
+        missing_optional = evaluation.missing_optional.len(),
+        invalid_optional = evaluation.invalid_optional.len(),
+        missing_recommended = evaluation.missing_recommended.len(),
+        invalid_recommended = evaluation.invalid_recommended.len(),
+        "resource policy evaluated"
+    );
 }
