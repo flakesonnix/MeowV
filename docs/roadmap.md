@@ -56,6 +56,7 @@
 | 4.7 | Configurable periodic heartbeat loop — client-side periodic Ping; report-only, no enforcement |
 | 4.9 | Heartbeat status / metrics — `HeartbeatMetrics` return from client loop; client prints summary on shutdown; server tracks `ping_received_count`/`pong_sent_count` via `SessionDiagnostics` |
 | 4.10 | Heartbeat admin observability — surface heartbeat counts in `sessions`/`diagnostics` admin output via registry snapshot; tests; docs |
+| 4.11 | Heartbeat timeout policy planner — `HeartbeatPolicy`, `HeartbeatDecision`, `HeartbeatPlannerInput`; deterministic evaluator; surfaced in `SessionDiagnostics`; report-only by default |
 
 ---
 
@@ -250,6 +251,26 @@ Wire signature verification into resource flow (report-only):
 - 300 workspace tests passing
 - No enforcement, no disconnects, no downloads, no cache writes
 - `docs/signature-verification-reporting.md` — new doc
+
+## Milestone 4.11
+
+Heartbeat timeout policy planner:
+
+- `HeartbeatPolicy` enum: `ReportOnly` / `Strict`
+- `HeartbeatPlannerInput` struct: `ping_sent`, `pong_received`, `timeout_or_error` — all cumulative counts
+- `HeartbeatDecision` variants: `NoHeartbeatObserved`, `Healthy`, `WouldWarnNoPongYet`, `WouldWarnTimeout`, `WouldMarkUnhealthy`, `WouldDisconnectMissedHeartbeat`
+- `evaluate_heartbeat()` — pure deterministic evaluator; `MISSED_HEARTBEAT_DISCONNECT_THRESHOLD = 3`
+- `HeartbeatDecision::to_text()` — deterministic human-readable output
+- `SessionDiagnostics::with_heartbeat_policy()` — builder chains heartbeat decision into diagnostics text and JSON output
+- All `SessionDiagnostics` build sites in `handle_client` chain `with_heartbeat_policy(ReportOnly)` — decision appears in diagnostic logs
+- Server-only view: `timeout_or_error = 0` (server does not receive client-side timeout counts)
+- Under `ReportOnly`: never escalates to `WouldDisconnectMissedHeartbeat`
+- 20 new heartbeat planner unit tests
+- No actual disconnect, no enforcement, no protocol change, no config change
+- `docs/client-heartbeat.md` updated with policy planner section
+- `docs/roadmap.md` updated
+
+---
 
 ## Milestone 4.10
 
