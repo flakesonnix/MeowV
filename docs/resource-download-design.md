@@ -262,8 +262,10 @@ subdirectory. The pack index builder already enforces this layout.
   - No download operations are performed in production.
   - Test-only downloads may use a known-trusted local server with
     announcements signed by a pinned test key.
-- Signature enforcement is gated behind its own milestone (M3.5 candidate)
-  and must be explicitly enabled via config.
+- Signature enforcement is gated behind its own milestone (M3.7: Ed25519
+  verification implementation, report-only) and must be explicitly enabled
+  via config.
+- **Detailed signature verification design**: `docs/signature-verification-design.md`.
 
 ## Join Gate Relationship
 
@@ -299,14 +301,20 @@ subdirectory. The pack index builder already enforces this layout.
 ## Next Recommended Milestones
 
 - **M3.4**: Local resource cache repair plan — design a cache-repair flow that
-  uses only local data. No network. No downloads.
-- **M3.5**: Real signature verification design — design or implement
-  announcement signature verification for resource authenticity.
-- **M3.6**: Download protocol DTOs only — add `ResourceDownloadRequest`,
+  uses only local data. No network. No downloads. ✅
+- **M3.5**: Real signature verification design — design announcement signature
+  verification for resource authenticity. No crypto, no enforcement. ✅ (current)
+- **M3.6**: Signature verification protocol DTO refinement — no crypto, add
+  canonicalization helpers, refine status usage. Report-only.
+- **M3.7**: Ed25519 verification implementation — add `ed25519-dalek`,
+  implement real verification. Report-only.
+- **M3.8**: Trusted key config — client-side or server-side config for trusted
+  public keys. Local-only.
+- **M3.9**: Download protocol DTOs only — add `ResourceDownloadRequest`,
   `ResourceDownloadOffer`, `ResourceFileChunk`, `ResourceDownloadComplete`,
   `ResourceDownloadError` message types to the protocol crate. No transfer
   logic.
-- **M3.7**: Staging directory model — implement staging directory creation,
+- **M3.10**: Staging directory model — implement staging directory creation,
   cleanup, and deterministic cache layout. Local-only. No downloads.
 
 ## Hard Boundaries

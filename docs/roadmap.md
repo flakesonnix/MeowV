@@ -43,7 +43,7 @@
 | 3.2 | Server lifecycle smoke test — config/runtime init, example config, no flaky networking |
 | 3.3 | Resource download design spec — threat model, protocol, staging, signatures |
 | 3.4 | Resource cache repair planning — report-only, no downloads, no mutation |
-| 3.5 | Minimal sandbox runtime design — no-exec design doc, no implementation |
+| 3.5 | Real signature verification design — design spec for announcement/resource index signature verification |
 
 ---
 
@@ -104,7 +104,9 @@ Resource download design spec (docs-only):
   retry policy, signed index format, trust roots, cache eviction, offline
   mode)
 - Next recommended milestones shifted: M3.4 (cache repair plan), M3.5
-  (signature verification), M3.6 (download DTOs), M3.7 (staging model)
+  (signature verification design), M3.6 (signature DTO refinement), M3.7
+  (Ed25519 verification), M3.8 (trusted key config), M3.9 (download DTOs),
+  M3.10 (staging model)
 - No source code modified. No dependencies added. No network endpoints.
 
 ## Milestone 3.4
@@ -121,6 +123,42 @@ Resource cache repair planning (report-only):
 - No downloads, no file writes, no execution, no network access
 - `docs/resource-cache-repair-plan.md`
 - All existing boundaries preserved
+
+## Milestone 3.5
+
+Real signature verification design (docs-only):
+
+- `docs/signature-verification-design.md` — comprehensive design specification
+- Scope: future-only, no crypto, no enforcement, no implementation
+- Current state documented: `ResourceAnnouncementSignature` metadata stub,
+  `check_announcement_signature_stub` returns `NotProvided`/`NotChecked`
+- Canonical signing target defined: protocol version, resource name/version,
+  requirement level, file list with paths/sizes/hashes
+- Canonicalization requirements: stable field order, UTF-8, normalized relative
+  paths, no absolute paths, no `..`, no symlinks, no non-deterministic maps,
+  no optional timestamps unless explicitly included
+- Algorithm recommendation: Ed25519 (RFC 8032) with algorithm agility via
+  existing `algorithm` field; no custom crypto
+- Trust model: per-server pinned keys, TOFU as secondary option, `key_id`
+  dispatch, key rotation, key revocation (future), no global trust anchors
+- Verification flow: canonicalize → look up key → verify → report
+- 11 failure modes documented: no signature, unsupported algorithm, unknown
+  key_id, invalid signature, replay, canonicalization mismatch, etc.
+- Enforcement policy: report-only first, phased activation via config gating,
+  never enforced before explicit milestone
+- Relationship to download design: signature verifies metadata, hash verifies
+  content, no-exec boundary is separate
+- 12 open questions with recommendations (JSON vs CBOR, key storage format,
+  key rotation UX, revocation mechanism, validity timestamps, offline mode,
+  server browser trust metadata, multi-resource bundle signatures,
+  per-resource vs per-announcement signatures, signature format encoding,
+  timestamp source, key ID format)
+- Next milestones: M3.6 (signature DTO refinement), M3.7 (Ed25519 impl),
+  M3.8 (trusted key config), M3.9 (download DTOs), M3.10 (staging model)
+- No source code modified. No dependencies added. No network endpoints.
+- `docs/signed-resource-announcements.md` updated to cross-reference design
+- `docs/resource-download-design.md` updated with new milestone numbering
+- `docs/security-boundaries.md` updated with cross-reference
 
 ---
 

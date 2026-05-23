@@ -70,7 +70,7 @@ All policy decisions are currently dry-run or report-only:
 | Join gate | Not enforced — logged only |
 | Capability requirements | Not enforced — logged only |
 | Resource compatibility | Not enforced — reported only |
-| Announcement signatures | Not verified — stub only |
+| Announcement signatures | Not verified — stub only; design spec at `docs/signature-verification-design.md` |
 
 A future milestone may activate enforcement for specific gates, but each
 activation will require its own milestone, explicit config gating, and a
@@ -93,5 +93,8 @@ These checks are a hard error at startup and cannot be bypassed at runtime.
 - `docs/legal-boundaries.md` — legal/compliance boundaries (proprietary code,
   clean-room requirements, risk notes).
 - `docs/architecture.md` — crate/module map, pipelines, dry-run policies.
+- `docs/signature-verification-design.md` — design specification for future
+  signature verification (spec only, no implementation).
+- `docs/signed-resource-announcements.md` — current stub implementation.
 - `docs/resource-download-design.md` — design specification for future
   download and cache repair (spec only, no implementation).
