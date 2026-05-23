@@ -239,6 +239,51 @@ pub fn verify_ed25519_signature(
     }
 
 // ---------------------------------------------------------------------------
+// Signature policy enforcement gate (M4.0)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignaturePolicy {
+    ReportOnly,
+    Strict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignaturePolicyViolation {
+    pub message: String,
+}
+
+pub fn evaluate_signature_policy(
+    report: &VerificationReport,
+    policy: &SignaturePolicy,
+) -> Result<(), SignaturePolicyViolation> {
+    match policy {
+        SignaturePolicy::ReportOnly => Ok(()),
+        SignaturePolicy::Strict => {
+            if report.all_valid() || report.is_empty() {
+                Ok(())
+            } else {
+                let failed_count = report
+                    .entries
+                    .iter()
+                    .filter(|e| e.outcome != VerificationOutcome::Valid)
+                    .count();
+                Err(SignaturePolicyViolation {
+                    message: format!(
+                        "signature policy violation (strict): {}/{} resource(s) rejected\n\
+                         (report-only: no enforcement was applied to the server, \
+                         this client refuses this announcement){extra}",
+                        failed_count,
+                        report.entries.len(),
+                        extra = "",
+                    ),
+                })
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -764,5 +809,112 @@ mod tests {
         assert!(report.is_empty());
         assert!(report.all_valid()); // empty → vacuously true
         assert!(report.to_text().contains("(empty, no resources)"));
+    }
+
+    // -------------------------------------------------------------------
+    // Signature policy tests (M4.0)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn policy_report_only_never_rejects() {
+        let (sk, _vk) = test_keypair(1);
+        let mut announcement = test_announcement();
+        sign_announcement(&mut announcement, &sk, "key-99");
+
+        // Engine has no matching key → UnknownKeyId → report not all_valid
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        let report = execute_verification_plan(&announcement, &plan, &[]);
+        assert!(!report.all_valid());
+
+        // ReportOnly → always Ok
+        assert!(evaluate_signature_policy(&report, &SignaturePolicy::ReportOnly).is_ok());
+    }
+
+    #[test]
+    fn policy_strict_rejects_invalid() {
+        let (sk, _vk) = test_keypair(2);
+        let mut announcement = test_announcement();
+        sign_announcement(&mut announcement, &sk, "key-99");
+
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        let report = execute_verification_plan(&announcement, &plan, &[]);
+        assert!(!report.all_valid());
+
+        let result = evaluate_signature_policy(&report, &SignaturePolicy::Strict);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("signature policy violation"));
+    }
+
+    #[test]
+    fn policy_strict_rejects_unsigned() {
+        let announcement = test_announcement(); // no signature
+
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        let report = execute_verification_plan(&announcement, &plan, &[]);
+        assert!(!report.all_valid());
+
+        let result = evaluate_signature_policy(&report, &SignaturePolicy::Strict);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn policy_strict_allows_valid() {
+        let (sk, vk) = test_keypair(3);
+        let mut announcement = test_announcement();
+        sign_announcement(&mut announcement, &sk, "good-key");
+
+        let trusted_identity = vec![TrustedKey {
+            key_id: "good-key".to_string(),
+            algorithm: "ed25519".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted_identity, false);
+        let trusted_material = vec![TrustedPublicKey {
+            key_id: "good-key".to_string(),
+            algorithm: "ed25519".to_string(),
+            public_key: vk.to_bytes().to_vec(),
+        }];
+        let report = execute_verification_plan(&announcement, &plan, &trusted_material);
+        assert!(report.all_valid());
+
+        assert!(evaluate_signature_policy(&report, &SignaturePolicy::Strict).is_ok());
+    }
+
+    #[test]
+    fn policy_strict_allows_empty() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![],
+            signature: None,
+        };
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        let report = execute_verification_plan(&announcement, &plan, &[]);
+        assert!(report.is_empty());
+        assert!(report.all_valid());
+
+        assert!(evaluate_signature_policy(&report, &SignaturePolicy::Strict).is_ok());
+    }
+
+    #[test]
+    fn policy_violation_message_contains_details() {
+        let (sk, _vk) = test_keypair(4);
+        let mut announcement = test_announcement();
+        sign_announcement(&mut announcement, &sk, "bad-key");
+
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        let report = execute_verification_plan(&announcement, &plan, &[]);
+        let err = evaluate_signature_policy(&report, &SignaturePolicy::Strict).unwrap_err();
+        assert!(err.message.contains("signature policy violation"));
+        assert!(err.message.contains("rejected"));
+    }
+
+    #[test]
+    fn policy_violation_implements_debug_and_eq() {
+        let v = SignaturePolicyViolation {
+            message: "test".to_string(),
+        };
+        let v2 = SignaturePolicyViolation {
+            message: "test".to_string(),
+        };
+        assert_eq!(v, v2);
+        assert!(!format!("{v:?}").is_empty());
     }
 }

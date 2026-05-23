@@ -12,7 +12,7 @@ use protocol::{
     current_protocol_profile, decode_server_line, encode_line, negotiate_protocol_dry_run,
 };
 use protocol::signature_engine::{
-    TrustedPublicKey, execute_verification_plan,
+    SignaturePolicy, TrustedPublicKey, evaluate_signature_policy, execute_verification_plan,
 };
 use resource_manifest::{
     CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind, ResourceManifest,
@@ -194,8 +194,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let signature_policy = parse_signature_policy(&args);
+
     if let Some(path) = read_flag(&args, "--verify-announcement-signature") {
-        return print_verify_announcement_signature(&path, &args);
+        return print_verify_announcement_signature(&path, &args, &signature_policy);
     }
 
     let config = ClientConfig::load(&args)?;
@@ -255,7 +257,21 @@ async fn main() -> Result<()> {
         let packet = decode_server_line(&line)?;
         match packet {
             ServerMessage::ResourceAnnouncement(announcement) => {
+                let plan = build_signature_verification_plan(
+                    &announcement,
+                    &keys_as_identity(trusted_keys.as_deref().unwrap_or(&[])),
+                    false,
+                );
+                let engine_report =
+                    execute_verification_plan(&announcement, &plan, trusted_keys.as_deref().unwrap_or(&[]));
                 print_engine_verification(&announcement, trusted_keys.as_deref());
+
+                if let Err(violation) = evaluate_signature_policy(&engine_report, &signature_policy) {
+                    eprintln!("ERROR: {}", violation.message);
+                    eprintln!("  (strict policy — announcement rejected, no resources will be processed)");
+                    break;
+                }
+
                 let report =
                     handle_resource_announcement(&announcement, config.resource_cache.as_deref())?;
                 writer_half
@@ -751,7 +767,11 @@ fn keys_as_identity(keys: &[TrustedPublicKey]) -> Vec<TrustedKey> {
         .collect()
 }
 
-fn print_verify_announcement_signature(path: &str, args: &[String]) -> Result<()> {
+fn print_verify_announcement_signature(
+    path: &str,
+    args: &[String],
+    policy: &SignaturePolicy,
+) -> Result<()> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read announcement file: {path}"))?;
     let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
@@ -765,16 +785,39 @@ fn print_verify_announcement_signature(path: &str, args: &[String]) -> Result<()
 
     let reject_unsigned = read_flag_exists(args, "--reject-unsigned");
 
-    let plan = build_signature_verification_plan(&announcement, &keys_as_identity(&trusted_keys), reject_unsigned);
+    let plan = build_signature_verification_plan(
+        &announcement,
+        &keys_as_identity(&trusted_keys),
+        reject_unsigned,
+    );
     println!("Verification Plan:");
     print!("{}", plan.to_text());
 
     let report = execute_verification_plan(&announcement, &plan, &trusted_keys);
     println!("Verification Report:");
     print!("{}", report.to_text());
+    println!("  Policy: {:?}", policy);
     println!("  (report-only: no enforcement was applied)");
 
+    match evaluate_signature_policy(&report, policy) {
+        Ok(()) => {
+            println!("  Result: announcement accepted under current policy");
+        }
+        Err(violation) => {
+            eprintln!("  RESULT: ANNOUNCEMENT REJECTED");
+            eprintln!("  Reason: {}", violation.message);
+            anyhow::bail!("announcement rejected by signature policy");
+        }
+    }
+
     Ok(())
+}
+
+fn parse_signature_policy(args: &[String]) -> SignaturePolicy {
+    match read_flag(args, "--signature-policy").as_deref() {
+        Some("strict") => SignaturePolicy::Strict,
+        _ => SignaturePolicy::ReportOnly,
+    }
 }
 
 fn format_signature_status(status: &SignatureVerificationStatus) -> &'static str {
