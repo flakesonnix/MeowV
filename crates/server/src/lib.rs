@@ -1,13 +1,20 @@
+mod config;
 mod diagnostics;
 mod event_log;
 mod session;
 
+pub use config::{
+    ConfigError, DiagnosticsFormat, DiagnosticsSection, JoinGateConfigMode, JoinGateSection,
+    ProtocolSection, ResourcesSection, ServerConfig, ServerSection,
+};
+
+use config::DiagnosticsFormat as Fmt;
 use diagnostics::SessionDiagnostics;
 use event_log::{SessionEventKind, SessionEventLog};
 use session::{SessionState, SessionStateError, SessionStateMachine};
-use std::{collections::HashMap, env, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use protocol::{
     AnnouncedResource, AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState,
     JoinGateDecision, JoinGateOutcome, PROTOCOL_VERSION, Position, ProtocolCapability,
@@ -18,7 +25,6 @@ use protocol::{
     shared_capabilities,
 };
 use resource_manifest::build_pack_index;
-use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
@@ -28,45 +34,6 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ServerConfig {
-    pub bind: String,
-    pub tick_rate: u64,
-    pub motd: String,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            bind: "127.0.0.1:7000".to_string(),
-            tick_rate: 10,
-            motd: "welcome to meowv milestone 0".to_string(),
-        }
-    }
-}
-
-impl ServerConfig {
-    pub fn load() -> Result<Self> {
-        let mut cfg = Self::default();
-
-        if let Ok(path) = env::var("MEOWV_CONFIG") {
-            let raw = std::fs::read_to_string(&path)
-                .with_context(|| format!("failed to read config file: {path}"))?;
-            cfg = toml::from_str(&raw).context("failed to parse config TOML")?;
-        }
-
-        if let Ok(bind) = env::var("MEOWV_SERVER_BIND") {
-            cfg.bind = bind;
-        }
-
-        if let Ok(tick_rate) = env::var("MEOWV_TICK_RATE") {
-            cfg.tick_rate = tick_rate.parse().context("invalid MEOWV_TICK_RATE")?;
-        }
-
-        Ok(cfg)
-    }
-}
 
 #[derive(Debug, Clone)]
 struct ClientInfo {
@@ -82,8 +49,13 @@ struct SharedState {
 }
 
 pub async fn run(config: ServerConfig) -> Result<()> {
-    let listener = TcpListener::bind(&config.bind).await?;
-    info!(bind = %config.bind, tick_rate = config.tick_rate, "server listening");
+    let listener = TcpListener::bind(&config.server.bind_addr).await?;
+    info!(
+        bind = %config.server.bind_addr,
+        tick_rate = config.server.tick_rate,
+        name = %config.server.name,
+        "server listening"
+    );
     run_with_listener(listener, config).await
 }
 
@@ -124,7 +96,7 @@ fn spawn_tick_loop(
     tx: broadcast::Sender<ServerMessage>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let tick_ms = (1000 / config.tick_rate.max(1)).max(1);
+        let tick_ms = (1000 / config.server.tick_rate.max(1)).max(1);
         let mut interval = time::interval(Duration::from_millis(tick_ms));
         let mut tick: u64 = 0;
 
@@ -201,8 +173,14 @@ async fn handle_client(
                             "protocol mismatch: client={protocol_version} server={PROTOCOL_VERSION}"
                         ),
                     );
-                    let diag = SessionDiagnostics::from_parts(&session, &event_log);
-                    info!(%client_id, "session diagnostics (failed):\n{}", diag.to_text());
+                    if config.diagnostics.print_session_diagnostics {
+                        let diag = SessionDiagnostics::from_parts(&session, &event_log);
+                        let text = match config.diagnostics.format {
+                            Fmt::Text => diag.to_text(),
+                            Fmt::JsonStub => diag.to_json_stub(),
+                        };
+                        info!(%client_id, "session diagnostics (failed):\n{text}");
+                    }
                     send_direct(
                         &mut writer_half,
                         &ServerMessage::Disconnect {
@@ -281,7 +259,9 @@ async fn handle_client(
         ClientInfo {
             name: name.clone(),
             entity_id,
-            last_announcement: build_example_resource_announcement(),
+            last_announcement: build_example_resource_announcement(
+                &config.resources.announcement_resource_dir,
+            ),
             shared_caps: shared_caps.clone(),
         },
     );
@@ -290,7 +270,7 @@ async fn handle_client(
         &mut writer_half,
         &ServerMessage::Welcome {
             client_id,
-            motd: config.motd,
+            motd: config.server.motd.clone(),
             protocol_version: PROTOCOL_VERSION,
         },
     )
@@ -476,8 +456,14 @@ async fn handle_client(
                             "handshake pipeline complete (dry-run)",
                         );
                         info!(%client_id, state = ?session.state(), "session: ready (dry-run)");
-                        let diag = SessionDiagnostics::from_parts(&session, &event_log);
-                        info!(%client_id, "session diagnostics:\n{}", diag.to_text());
+                        if config.diagnostics.print_session_diagnostics {
+                            let diag = SessionDiagnostics::from_parts(&session, &event_log);
+                            let text = match config.diagnostics.format {
+                                Fmt::Text => diag.to_text(),
+                                Fmt::JsonStub => diag.to_json_stub(),
+                            };
+                            info!(%client_id, "session diagnostics:\n{text}");
+                        }
                     }
                 } else {
                     warn!(%client_id, "resource availability report received before announcement was stored");
@@ -512,10 +498,16 @@ fn next_entity_id(client_id: &Uuid) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
-fn build_example_resource_announcement() -> Option<ResourceAnnouncement> {
-    let resource_dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/resources/chat");
-    let index = build_pack_index(resource_dir).ok()?;
+fn build_example_resource_announcement(resource_dir: &str) -> Option<ResourceAnnouncement> {
+    let path = std::path::Path::new(resource_dir);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(resource_dir)
+    };
+    let index = build_pack_index(resolved).ok()?;
     let files = index
         .files
         .into_iter()

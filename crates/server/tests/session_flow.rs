@@ -1,13 +1,13 @@
 use anyhow::Result;
 use protocol::{
-    decode_server_line, encode_line, ClientMessage, DisconnectReason, ServerMessage,
-    PROTOCOL_VERSION,
+    ClientMessage, DisconnectReason, PROTOCOL_VERSION, ServerMessage, decode_server_line,
+    encode_line,
 };
-use server::{run_with_listener, ServerConfig};
+use server::{ServerConfig, ServerSection, run_with_listener};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 
 #[tokio::test]
@@ -17,9 +17,13 @@ async fn login_chat_and_snapshot_flow() -> Result<()> {
     let server_task = tokio::spawn(run_with_listener(
         listener,
         ServerConfig {
-            bind: addr.to_string(),
-            tick_rate: 20,
-            motd: "test motd".to_string(),
+            server: ServerSection {
+                bind_addr: addr.to_string(),
+                tick_rate: 20,
+                motd: "test motd".to_string(),
+                ..ServerSection::default()
+            },
+            ..ServerConfig::default()
         },
     ));
 
@@ -111,9 +115,13 @@ async fn rejects_protocol_mismatch() -> Result<()> {
     let server_task = tokio::spawn(run_with_listener(
         listener,
         ServerConfig {
-            bind: addr.to_string(),
-            tick_rate: 20,
-            motd: "test motd".to_string(),
+            server: ServerSection {
+                bind_addr: addr.to_string(),
+                tick_rate: 20,
+                motd: "test motd".to_string(),
+                ..ServerSection::default()
+            },
+            ..ServerConfig::default()
         },
     ));
 
