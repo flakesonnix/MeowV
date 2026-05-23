@@ -12,7 +12,8 @@ use protocol::{
     current_protocol_profile, decode_server_line, encode_line, negotiate_protocol_dry_run,
 };
 use protocol::signature_engine::{
-    SignaturePolicy, TrustedPublicKey, evaluate_signature_policy, execute_verification_plan,
+    KeyConfigError, SignaturePolicy, TrustedPublicKey, evaluate_signature_policy,
+    execute_verification_plan, validate_trusted_key_config,
 };
 use resource_manifest::{
     CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind, ResourceManifest,
@@ -28,6 +29,7 @@ use tokio::{
     net::TcpStream,
 };
 use tracing::info;
+mod heartbeat;
 
 #[derive(Debug, Clone, Deserialize)]
 struct TrustedKeyEntry {
@@ -252,6 +254,35 @@ async fn main() -> Result<()> {
         .as_deref()
         .map(load_trusted_keys)
         .transpose()?;
+
+    if let Some(ref keys) = trusted_keys {
+        validate_trusted_key_config(keys).map_err(|e| {
+            anyhow::anyhow!("invalid trusted key config: {e}")
+        })?;
+        print_trusted_keys_summary(keys);
+    }
+
+    match (&signature_policy, &trusted_keys) {
+        (SignaturePolicy::Strict, None) => {
+            anyhow::bail!(
+                "--signature-policy strict requires trusted keys. \
+                 Use --trusted-keys <path> or set trusted_keys_file in config."
+            );
+        }
+        (SignaturePolicy::Strict, Some(keys)) if keys.is_empty() => {
+            anyhow::bail!(
+                "--signature-policy strict requires trusted keys. \
+                 Loaded trusted key file is empty."
+            );
+        }
+        (SignaturePolicy::ReportOnly, None) => {
+            eprintln!(
+                "info: no trusted keys configured — signature verification will not be available. \
+                 Use --trusted-keys <path> to enable."
+            );
+        }
+        _ => {}
+    }
 
     while let Some(line) = lines.next_line().await? {
         let packet = decode_server_line(&line)?;
@@ -778,10 +809,30 @@ fn print_verify_announcement_signature(
         .context("failed to parse ResourceAnnouncement JSON")?;
 
     let trusted_keys = if let Some(key_path) = read_flag(args, "--trusted-keys") {
-        load_trusted_keys(&key_path)?
+        let keys = load_trusted_keys(&key_path)
+            .with_context(|| format!("failed to load trusted keys from '{key_path}'"))?;
+        validate_trusted_key_config(&keys).map_err(|e| {
+            anyhow::anyhow!("invalid trusted key config in '{key_path}': {e}")
+        })?;
+        print_trusted_keys_summary(&keys);
+        keys
     } else {
-        vec![]
+        match policy {
+            SignaturePolicy::Strict => anyhow::bail!(
+                "--signature-policy strict requires --trusted-keys <path>"
+            ),
+            SignaturePolicy::ReportOnly => {
+                eprintln!("info: no trusted keys provided — using empty set");
+                vec![]
+            }
+        }
     };
+
+    if trusted_keys.is_empty() && *policy == SignaturePolicy::Strict {
+        anyhow::bail!(
+            "--signature-policy strict requires at least one trusted key"
+        );
+    }
 
     let reject_unsigned = read_flag_exists(args, "--reject-unsigned");
 
@@ -811,6 +862,15 @@ fn print_verify_announcement_signature(
     }
 
     Ok(())
+}
+
+fn print_trusted_keys_summary(keys: &[TrustedPublicKey]) {
+    let ids: Vec<&str> = keys.iter().map(|k| k.key_id.as_str()).collect();
+    println!(
+        "Trusted keys loaded: {} key(s) — [{}]",
+        keys.len(),
+        ids.join(", ")
+    );
 }
 
 fn parse_signature_policy(args: &[String]) -> SignaturePolicy {
