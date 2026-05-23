@@ -32,9 +32,9 @@ Blank lines are silently ignored.
 |---|---|---|
 | `help` | Print the list of available commands. |
 | `status` | Report server running state and active policy mode (live). |
-| `sessions` | Show live session counts (connected / ready_dry_run / failed). |
+| `sessions` | Show live per-session details from the session registry. Includes session ID, state, event count, protocol version, ready_dry_run and failed flags. Falls back to aggregate counts when registry is unavailable. |
 | `resources` | Show configured announcement resource directory. |
-| `diagnostics` | Dump live session diagnostics from `SessionRegistry` snapshot. Shows session IDs, state, event count, ready_dry_run, failed. No IP addresses or personal data. |
+| `diagnostics` | Dump live session diagnostics from `SessionRegistry` snapshot. Shows session IDs, state, event count, ready_dry_run, failed, protocol version. No IP addresses or personal data. |
 | `quit` | Request a clean server shutdown. |
 
 ## Output
@@ -46,6 +46,15 @@ Each command produces a single-line result logged at `info` level via
 INFO admin  message=commands: help, status, sessions, resources, diagnostics, quit
 INFO admin  message=server is running (dry-run mode, all policies report-only)
 INFO admin  message=server shutdown requested via admin command
+```
+
+The `sessions` command shows per-session details when the registry is
+available:
+
+```
+INFO admin  message=sessions: 2  ready_dry_run: 1  failed: 0
+   session-1: state=ReadyDryRun  events=11  ready_dry_run=true  failed=false  protocol=v1
+   session-2: state=Connected  events=3  ready_dry_run=false  failed=false  protocol=v1
 ```
 
 Unknown commands are logged as errors:
@@ -83,6 +92,8 @@ consistent with standard Unix daemon behaviour when stdin is a pipe.
 | `handle_admin_command` | `crates/server/src/admin.rs` |
 | `handle_admin_command_with_status` | `crates/server/src/admin.rs` |
 | `handle_admin_command_with_context` | `crates/server/src/admin.rs` |
+| `SessionRegistryEntry` | `crates/server/src/session_registry.rs` |
+| `SessionRegistrySnapshot` | `crates/server/src/session_registry.rs` |
 | `AdminSection` | `crates/server/src/config.rs` |
 | `admin_stdin_loop` | `crates/server/src/lib.rs` (private) |
 | `accept_loop` | `crates/server/src/lib.rs` (private) |
@@ -90,9 +101,10 @@ consistent with standard Unix daemon behaviour when stdin is a pipe.
 ## Live vs Placeholder Status
 
 `status`, `sessions`, and `diagnostics` return live data from the server runtime
-status snapshot and the session registry. `resources` returns the configured
-announcement directory from the server config. No command currently returns
-placeholder messages.
+status snapshot and the session registry. `sessions` prefers registry data
+(per-session details) and falls back to aggregate counts from the status
+snapshot. `resources` returns the configured announcement directory from the
+server config. No command currently returns placeholder messages.
 
 ## Hard Boundaries
 

@@ -295,13 +295,19 @@ Protocol compatibility negotiation design:
 
 Admin sessions command — live per-session state from registry:
 
-- `diagnostics` admin command: prints live per-session state from `SessionRegistrySnapshot::to_diagnostics_text()`
-- `handle_admin_command_with_context(command, status, registry)` — full-context handler accepting optional registry snapshot
-- `handle_admin_command` and `handle_admin_command_with_status` delegate to `handle_admin_command_with_context`
-- Per-session output: session ID, state, event count, ready_dry_run, failed
-- No IP addresses, timestamps, or personal data in diagnostics output
-- Local-only, admin-only: no remote API, no persistence, no telemetry
-- 7 admin unit tests (diagnostics with empty / connected / ready_dry_run / failed registry)
+- `sessions` admin command now uses registry snapshot for per-session details:
+  session ID, state, event count, protocol_version, ready_dry_run, failed
+- `SessionRegistryEntry` gains `protocol_version: Option<u32>` — set after
+  version check in `handle_client`
+- `SessionRegistry::set_protocol_version()` — new method
+- `SessionRegistrySnapshot::to_diagnostics_text()` extended with protocol version
+- `admin_stdin_loop` passes registry snapshot to context handler so sessions
+  command gets live registry data; falls back to status counts when registry
+  unavailable
+- 5 new admin unit tests: empty registry, connected session, ReadyDryRun with
+  protocol version, fallback to counts, registry preferred over status
+- `docs/server-admin-debug-commands.md` updated with sessions output format
+- No protocol wire changes, no enforcement, read-only
 
 ## Milestone 2.8
 
