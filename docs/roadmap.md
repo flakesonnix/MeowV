@@ -30,6 +30,19 @@ Protocol compatibility negotiation design:
 - server/client dry-run reporting
 - docs explaining future activation path
 
+## Milestone 2.1
+
+Session event log / audit trail:
+
+- in-memory `SessionEventLog` with `SessionEventKind` variants
+- `SessionEvent` carrying sequence, kind, state, and message (no timestamps)
+- integrated into `handle_client` alongside every state transition
+- records Connected, HelloReceived, VersionChecked, ProtocolNegotiationDryRun,
+  CapabilityGateChecked (×2), ResourceAnnouncementSent, AvailabilityReportReceived,
+  ResourcePolicyEvaluated, JoinGateDryRunSent, ReadyDryRun, and Failed
+- session audit summary logged at session end
+- 8 unit tests; no timestamps, no IP/personal data, no persistence
+
 ## Milestone 2.0
 
 Server session state machine:
