@@ -204,6 +204,42 @@ async fn main() -> Result<()> {
 
     let config = ClientConfig::load(&args)?;
 
+    // Manual ping CLI
+    if read_flag_exists(&args, "--ping-once") {
+        let seq: u64 = read_flag(&args, "--ping-sequence")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        let timeout_ms: u64 = read_flag(&args, "--ping-timeout-ms")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2000);
+
+        let stream = TcpStream::connect(&config.addr).await?;
+        let (reader_half, mut writer_half) = stream.into_split();
+        let mut lines = BufReader::new(reader_half).lines();
+
+        writer_half
+            .write_all(
+                encode_line(&ClientMessage::Login {
+                    name: config.name.clone(),
+                    protocol_version: PROTOCOL_VERSION,
+                })?
+                .as_bytes(),
+            )
+            .await?;
+
+        // run the minimal ping flow
+        match client::perform_ping_once(&mut writer_half, &mut lines, seq, Duration::from_millis(timeout_ms)).await {
+            Ok(()) => {
+                println!("Ping {}: Pong received", seq);
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Ping {}: failed: {}", seq, e);
+                return Ok(());
+            }
+        }
+    }
+
     let stream = TcpStream::connect(&config.addr).await?;
     let (reader_half, mut writer_half) = stream.into_split();
     let mut lines = BufReader::new(reader_half).lines();
