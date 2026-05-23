@@ -313,15 +313,18 @@ Admin sessions command — live per-session state from registry:
 
 Full handshake integration assertions:
 
-- New `crates/server/tests/handshake_observability.rs` — 4 integration tests
+- New `crates/server/tests/handshake_observability.rs` — 7 integration tests
 - `SharedState` and `ClientInfo` made pub for test inspection
 - `run_with_listener_and_state()` — test helper exposing Arc<SharedState> for registry observation
 - Tests cover:
-  - `full_handshake_creates_session_and_reaches_ready_dry_run`: asserts session created, state=ReadyDryRun, event_count=11, registry cleaned after disconnect
+  - `full_handshake_creates_session_and_reaches_ready_dry_run`: asserts session created, state=ReadyDryRun, event_count=11, protocol_version set, registry cleaned after disconnect, runtime status matches
   - `version_mismatch_disconnects_and_cleans_up_session`: asserts Disconnect + session cleanup
   - `invalid_handshake_first_message_not_login`: asserts InvalidHandshake disconnect + cleanup
-  - `registry_session_id_is_deterministic`: asserts deterministic session-1 ID
-- 4 new integration tests, 317 workspace tests passing
+  - `registry_session_id_is_deterministic`: asserts deterministic session-1 ID, protocol_version
+  - `session_created_on_connect_before_login`: session exists in Connected before any message
+  - `session_cleaned_up_on_early_disconnect`: session created then cleaned on connection drop
+  - `runtime_status_reflects_live_session_counts`: status snapshot matches registry across multiple connections
+- 7 new integration tests, 325 workspace tests passing
 - No behavior changes, no protocol changes, no wire format changes
 
 ## Milestone 2.7

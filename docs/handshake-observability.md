@@ -40,6 +40,30 @@ Each integration test asserts consistency across all layers:
 
 - **`registry_session_id_is_deterministic`**
   - First session always gets deterministic ID "session-1"
+  - protocol_version is set correctly on entry
+
+- **`session_created_on_connect_before_login`**
+  - Session exists in Connected state before any message is sent
+  - protocol_version is None before version check
+  - Session removed on disconnect
+
+- **`session_cleaned_up_on_early_disconnect`**
+  - Session created on connect even when client sends nothing
+  - SessionGuard removes it on connection drop
+  - All counts (connected/failed/ready_dry_run) return to zero
+
+- **`runtime_status_reflects_live_session_counts`**
+  - `ServerRuntimeStatus::with_session_counts` matches registry snapshot
+  - Status text contains exact connected/ready_dry_run/failed counts
+  - Second client increases connected_sessions without altering ready_dry_run
+  - Status text is consistent across multiple connections
+
+## Runtime Status Consistency
+
+When built from config and the live registry snapshot,
+`ServerRuntimeStatus::with_session_counts` reflects the exact same
+connected/ready_dry_run/failed counts as the registry. The integration tests
+assert this at multiple points during the handshake.
 
 ## Event Count Contract
 

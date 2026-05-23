@@ -312,7 +312,35 @@ async fn handle_client(
                 protocol_version,
             } => {
                 if let Err(e) = session.on_hello_received() {
-                    warn!(%client_id, error = %e, "session: unexpected hello transition error");
+                    session.fail(e.to_string());
+                    event_log.record(
+                        SessionEventKind::Failed,
+                        SessionState::Failed,
+                        format!("{e}"),
+                    );
+                    state.registry.lock().unwrap().update_session(
+                        &session_id,
+                        session.state().clone(),
+                        event_log.len(),
+                    );
+                    if config.diagnostics.print_session_diagnostics {
+                        let diag = SessionDiagnostics::from_parts(&session, &event_log);
+                        let text = match config.diagnostics.format {
+                            Fmt::Text => diag.to_text(),
+                            Fmt::JsonStub => diag.to_json_stub(),
+                        };
+                        info!(%client_id, "session diagnostics (failed):\n{text}");
+                    }
+                    send_direct(
+                        &mut writer_half,
+                        &ServerMessage::Disconnect {
+                            reason: DisconnectReason::InvalidHandshake,
+                            message: format!("session state error: {e}"),
+                        },
+                    )
+                    .await?;
+                    info!(%client_id, state = ?session.state(), "session: failed on hello transition");
+                    return Ok(());
                 } else {
                     event_log.record(
                         SessionEventKind::HelloReceived,
@@ -398,21 +426,21 @@ async fn handle_client(
                         "protocol negotiation dry-run: non-exact overlap detected"
                     );
                 }
-                if let Err(e) = session.on_negotiation_logged() {
-                    warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
-                } else {
-                    event_log.record(
-                        SessionEventKind::ProtocolNegotiationDryRun,
-                        SessionState::NegotiationDryRunLogged,
-                        format!("negotiation status: {:?}", negotiation.status),
-                    );
-                    state.registry.lock().unwrap().update_session(
-                        &session_id,
-                        session.state().clone(),
-                        event_log.len(),
-                    );
-                    info!(%client_id, state = ?session.state(), "session: negotiation dry-run logged");
-                }
+        if let Err(e) = session.on_negotiation_logged() {
+            warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
+        } else {
+            event_log.record(
+                SessionEventKind::ProtocolNegotiationDryRun,
+                SessionState::NegotiationDryRunLogged,
+                format!("negotiation log processed for {name}"),
+            );
+            state.registry.lock().unwrap().update_session(
+                &session_id,
+                session.state().clone(),
+                event_log.len(),
+            );
+            info!(%client_id, state = ?session.state(), "session: negotiation logged");
+        }
 
                 (name, caps)
             }

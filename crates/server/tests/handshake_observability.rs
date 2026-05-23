@@ -6,12 +6,26 @@ use protocol::{
     ResourceAvailabilityEntry, ResourceAvailabilityReport, ResourceAvailabilityStatus,
     ServerMessage, decode_server_line, encode_line,
 };
-use server::{ServerConfig, ServerSection, SharedState, run_with_listener_and_state};
+use server::{
+    ServerConfig, ServerRuntimeStatus, ServerSection, SharedState, run_with_listener_and_state,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
     time::{Duration, timeout},
 };
+
+fn server_config(bind_addr: &str, motd: &str) -> ServerConfig {
+    ServerConfig {
+        server: ServerSection {
+            bind_addr: bind_addr.to_string(),
+            tick_rate: 20,
+            motd: motd.to_string(),
+            ..ServerSection::default()
+        },
+        ..ServerConfig::default()
+    }
+}
 
 #[tokio::test]
 async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()> {
@@ -19,19 +33,10 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
     let addr = listener.local_addr()?;
     let state = Arc::new(SharedState::default());
     let server_state = state.clone();
+    let config = server_config(&addr.to_string(), "test motd");
 
     let server_task = tokio::spawn(run_with_listener_and_state(
-        listener,
-        ServerConfig {
-            server: ServerSection {
-                bind_addr: addr.to_string(),
-                tick_rate: 20,
-                motd: "test motd".to_string(),
-                ..ServerSection::default()
-            },
-            ..ServerConfig::default()
-        },
-        state,
+        listener, config.clone(), state,
     ));
 
     assert_eq!(
@@ -73,7 +78,7 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
     assert_eq!(announcement.resources.len(), 1);
     assert_eq!(announcement.resources[0].name, "chat");
 
-    // Send availability report immediately (don't need to wait for chat broadcast)
+    // Send availability report immediately
     let report = build_available_report(&announcement);
     writer_half
         .write_all(
@@ -82,8 +87,7 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
         )
         .await?;
 
-    // Expect ChatBroadcast "alice joined" may arrive before or interleaved
-    // Read messages until we see JoinGateDecision
+    // Read messages until JoinGateDecision
     let mut saw_chat_join = false;
     let gate = loop {
         let msg = read_packet(&mut lines).await?;
@@ -116,6 +120,26 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
     assert!(entry.ready_dry_run);
     assert!(!entry.failed);
     assert_eq!(entry.event_count, 11);
+    assert_eq!(entry.protocol_version, Some(PROTOCOL_VERSION));
+
+    // --- Runtime status snapshot matches registry ---
+    let status = ServerRuntimeStatus::from_config(&config).with_session_counts(
+        reg_snap.connected_sessions,
+        reg_snap.ready_dry_run_sessions,
+        reg_snap.failed_sessions,
+    );
+    let status_text = status.to_text();
+    assert!(status_text.contains("connected_sessions: 1"), "status: {status_text}");
+    assert!(status_text.contains("ready_dry_run_sessions: 1"), "status: {status_text}");
+    assert!(status_text.contains("failed_sessions: 0"), "status: {status_text}");
+    assert!(status_text.contains("server_name: MeowV Local Dev Server"));
+    assert!(status_text.contains("protocol_version: 1"));
+    assert!(status_text.contains("diagnostics_enabled: true"));
+    assert!(!status_text.contains("client_ip"));
+
+    // --- Diagnostics to_text output (from unit tests) produces same structure ---
+    let diag_text = status_text;
+    assert!(diag_text.contains("connected_sessions: "));
 
     // --- Cleanup: disconnect, session removed ---
     drop(lines);
@@ -131,6 +155,13 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
         0
     );
 
+    // --- Status after cleanup reflects zero sessions ---
+    let status_after = ServerRuntimeStatus::from_config(&config)
+        .with_session_counts(0, 0, 0);
+    let status_after_text = status_after.to_text();
+    assert!(status_after_text.contains("connected_sessions: 0"));
+    assert!(status_after_text.contains("ready_dry_run_sessions: 0"));
+
     server_task.abort();
     Ok(())
 }
@@ -141,19 +172,10 @@ async fn version_mismatch_disconnects_and_cleans_up_session() -> Result<()> {
     let addr = listener.local_addr()?;
     let state = Arc::new(SharedState::default());
     let server_state = state.clone();
+    let config = server_config(&addr.to_string(), "test");
 
     let server_task = tokio::spawn(run_with_listener_and_state(
-        listener,
-        ServerConfig {
-            server: ServerSection {
-                bind_addr: addr.to_string(),
-                tick_rate: 20,
-                motd: "test".to_string(),
-                ..ServerSection::default()
-            },
-            ..ServerConfig::default()
-        },
-        state,
+        listener, config, state,
     ));
 
     assert_eq!(
@@ -200,19 +222,10 @@ async fn invalid_handshake_first_message_not_login() -> Result<()> {
     let addr = listener.local_addr()?;
     let state = Arc::new(SharedState::default());
     let server_state = state.clone();
+    let config = server_config(&addr.to_string(), "test");
 
     let server_task = tokio::spawn(run_with_listener_and_state(
-        listener,
-        ServerConfig {
-            server: ServerSection {
-                bind_addr: addr.to_string(),
-                tick_rate: 20,
-                motd: "test".to_string(),
-                ..ServerSection::default()
-            },
-            ..ServerConfig::default()
-        },
-        state,
+        listener, config, state,
     ));
 
     let stream = TcpStream::connect(addr).await?;
@@ -251,19 +264,10 @@ async fn registry_session_id_is_deterministic() -> Result<()> {
     let addr = listener.local_addr()?;
     let state = Arc::new(SharedState::default());
     let server_state = state.clone();
+    let config = server_config(&addr.to_string(), "test motd");
 
     let server_task = tokio::spawn(run_with_listener_and_state(
-        listener,
-        ServerConfig {
-            server: ServerSection {
-                bind_addr: addr.to_string(),
-                tick_rate: 20,
-                motd: "test motd".to_string(),
-                ..ServerSection::default()
-            },
-            ..ServerConfig::default()
-        },
-        state,
+        listener, config, state,
     ));
 
     let stream = TcpStream::connect(addr).await?;
@@ -318,9 +322,171 @@ async fn registry_session_id_is_deterministic() -> Result<()> {
     assert_eq!(snap.sessions.len(), 1);
     assert_eq!(snap.sessions[0].id.to_string(), "session-1");
     assert_eq!(snap.sessions[0].event_count, 11);
+    assert_eq!(snap.sessions[0].protocol_version, Some(PROTOCOL_VERSION));
 
     drop(lines);
     drop(writer_half);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_created_on_connect_before_login() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let server_state = state.clone();
+    let config = server_config(&addr.to_string(), "test");
+
+    let server_task = tokio::spawn(run_with_listener_and_state(
+        listener, config, state,
+    ));
+
+    let _stream = TcpStream::connect(addr).await?;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Handler creates session on connect before reading first message
+    let snap = server_state.registry.lock().unwrap().snapshot();
+    assert_eq!(snap.connected_sessions, 1);
+    assert_eq!(format!("{:?}", snap.sessions[0].state), "Connected");
+    assert_eq!(snap.sessions[0].protocol_version, None);
+
+    // Cleanup: drop stream, session removed
+    drop(_stream);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        server_state.registry.lock().unwrap().snapshot().connected_sessions,
+        0
+    );
+
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_cleaned_up_on_early_disconnect() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let server_state = state.clone();
+    let config = server_config(&addr.to_string(), "test");
+
+    let server_task = tokio::spawn(run_with_listener_and_state(
+        listener, config, state,
+    ));
+
+    let stream = TcpStream::connect(addr).await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Session was created
+    assert_eq!(
+        server_state.registry.lock().unwrap().snapshot().connected_sessions,
+        1
+    );
+
+    // Close connection without sending any message
+    drop(stream);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Registry cleaned up via SessionGuard
+    let snap = server_state.registry.lock().unwrap().snapshot();
+    assert_eq!(snap.connected_sessions, 0);
+    assert_eq!(snap.failed_sessions, 0);
+    assert_eq!(snap.ready_dry_run_sessions, 0);
+
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_status_reflects_live_session_counts() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let server_state = state.clone();
+    let config = server_config(&addr.to_string(), "status test");
+
+    let server_task = tokio::spawn(run_with_listener_and_state(
+        listener, config.clone(), state,
+    ));
+
+    // Connect first client, let it reach ReadyDryRun
+    let stream1 = TcpStream::connect(addr).await?;
+    let (r1, mut w1) = stream1.into_split();
+    let mut l1 = BufReader::new(r1).lines();
+
+    w1.write_all(
+        encode_line(&ClientMessage::Login {
+            name: "alice".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+        })?
+        .as_bytes(),
+    )
+    .await?;
+
+    let _welcome = read_packet(&mut l1).await?;
+    let announcement = read_packet(&mut l1).await?;
+    let announcement = match announcement {
+        ServerMessage::ResourceAnnouncement(a) => a,
+        other => panic!("expected ResourceAnnouncement, got {other:?}"),
+    };
+    let report = build_available_report(&announcement);
+    w1.write_all(
+        encode_line(&ClientMessage::ResourceAvailabilityReport(report))?
+            .as_bytes(),
+    )
+    .await?;
+
+    let mut saw_chat = false;
+    loop {
+        let msg = read_packet(&mut l1).await?;
+        match msg {
+            ServerMessage::JoinGateDecision(_) => break,
+            ServerMessage::ChatBroadcast { from, message } => {
+                if from == "server" && message == "alice joined" {
+                    saw_chat = true;
+                }
+            }
+            ServerMessage::EntitySnapshot { .. } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert!(saw_chat);
+
+    // Verify status from registry matches
+    let snap = server_state.registry.lock().unwrap().snapshot();
+    let status = ServerRuntimeStatus::from_config(&config).with_session_counts(
+        snap.connected_sessions,
+        snap.ready_dry_run_sessions,
+        snap.failed_sessions,
+    );
+    assert_eq!(status.connected_sessions, 1);
+    assert_eq!(status.ready_dry_run_sessions, 1);
+    assert_eq!(status.failed_sessions, 0);
+    assert!(status.to_text().contains("connected_sessions: 1"));
+    assert!(status.to_text().contains("ready_dry_run_sessions: 1"));
+    assert!(status.to_text().contains("failed_sessions: 0"));
+
+    // Second client connects but doesn't complete handshake
+    let _stream2 = TcpStream::connect(addr).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let snap2 = server_state.registry.lock().unwrap().snapshot();
+    let status2 = ServerRuntimeStatus::from_config(&config).with_session_counts(
+        snap2.connected_sessions,
+        snap2.ready_dry_run_sessions,
+        snap2.failed_sessions,
+    );
+    assert_eq!(status2.connected_sessions, 2);
+    assert_eq!(status2.ready_dry_run_sessions, 1);
+    assert_eq!(status2.failed_sessions, 0);
+    assert!(status2.to_text().contains("connected_sessions: 2"));
+    assert!(status2.to_text().contains("ready_dry_run_sessions: 1"));
+
+    drop(w1);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     server_task.abort();
