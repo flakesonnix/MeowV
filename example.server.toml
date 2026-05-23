@@ -1,0 +1,3 @@
+bind = "127.0.0.1:7000"
+tick_rate = 10
+motd = "welcome from example config"
