@@ -55,6 +55,7 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "game_edition",
  "protocol",
  "resource_manifest",
  "serde",
@@ -401,6 +402,7 @@ name = "resource_manifest"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "game_edition",
  "protocol",
  "serde",
  "sha2",
