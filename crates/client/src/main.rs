@@ -358,6 +358,36 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Periodic heartbeat loop (optional)
+    if read_flag_exists(&args, "--heartbeat-enabled") {
+        let interval_ms: u64 = read_flag(&args, "--heartbeat-interval-ms").and_then(|s| s.parse().ok()).unwrap_or(5000);
+        let timeout_ms: u64 = read_flag(&args, "--heartbeat-timeout-ms").and_then(|s| s.parse().ok()).unwrap_or(2000);
+
+        let writer = std::sync::Arc::new(tokio::sync::Mutex::new(writer_half));
+        let lines_arc = std::sync::Arc::new(tokio::sync::Mutex::new(lines));
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+
+        let hb_writer = writer.clone();
+        let hb_lines = lines_arc.clone();
+        tokio::spawn(async move {
+            client::heartbeat_loop(hb_writer, hb_lines, Duration::from_millis(interval_ms), Duration::from_millis(timeout_ms), stop_rx).await;
+        });
+
+        // For now, run indefinitely until stdin EOF or program exit; we simply wait here.
+        // In future we'll wire to signal handling. To keep it simple, block until stdin closes.
+        let mut stdin = tokio::io::stdin();
+        let mut buf = [0u8; 1];
+        // read until EOF
+        loop {
+            match stdin.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => continue,
+            }
+        }
+
+        // request heartbeat stop
+        let _ = stop_tx.send(());
+    }
     Ok(())
 }
 

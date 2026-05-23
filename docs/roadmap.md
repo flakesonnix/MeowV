@@ -53,6 +53,7 @@
 | 4.2 | Wire session enforcement into `handle_client` — Strict policy disconnects, ReportOnly preserved, integration tests |
 | 4.3 | Policy config sections + UX — `[signature]` section, `[enforcement]` validated, status/admin output, lifecycle summary, example config, docs |
 | 4.4 | Heartbeat / Ping-Pong Protocol — add Ping/Pong DTOs; server echoes Pong(sequence); tests |
+| 4.7 | Configurable periodic heartbeat loop — client-side periodic Ping; report-only, no enforcement |
 
 ---
 

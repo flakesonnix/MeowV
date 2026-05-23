@@ -6,6 +6,56 @@ use tokio::io::{BufReader, Lines};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time::Duration;
 use protocol::decode_server_line;
+use std::sync::Arc;
+use tokio::sync::Mutex as AsyncMutex;
+
+/// Start a periodic heartbeat loop that sends pings at `interval` and waits for
+/// matching pongs with `timeout`. The loop runs until `stop_rx` receives a
+/// message. This function runs the loop inline; callers usually spawn it as a
+/// background task.
+pub async fn heartbeat_loop(
+    writer: Arc<AsyncMutex<OwnedWriteHalf>>,
+    lines: Arc<AsyncMutex<Lines<BufReader<OwnedReadHalf>>>>,
+    interval: Duration,
+    timeout: Duration,
+    mut stop_rx: tokio::sync::oneshot::Receiver<()>,
+) {
+    let mut sequence: u64 = 1;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {
+                // Acquire locks for writer and reader, then perform ping+wait.
+                let mut wguard = match writer.lock().await.try_lock_owned() {
+                    Ok(g) => g,
+                    Err(_) => {
+                        // fallback to regular lock if try_lock_owned not available
+                        let mut g = writer.lock().await;
+                        // use unsafe transmute? not needed — we'll hold the guard
+                        // by shadowing. Use assignment.
+                        // Note: we can't move g out easily. Instead, use block.
+                        // We'll just use g directly below by creating a scope.
+                        drop(g);
+                        let mut g = writer.lock().await;
+                        g
+                    }
+                };
+                // Lock lines
+                let mut lguard = lines.lock().await;
+                // Call the helper with mutable refs
+                let res = crate::heartbeat::send_ping_and_wait_with_timeout(&mut *wguard, &mut *lguard, sequence, timeout).await;
+                match res {
+                    Ok(()) => tracing::info!("Heartbeat {}: Pong received", sequence),
+                    Err(e) => tracing::warn!("Heartbeat {}: failed: {}", sequence, e),
+                }
+                sequence = sequence.saturating_add(1);
+            }
+            _ = &mut stop_rx => {
+                tracing::info!("heartbeat loop stopping");
+                break;
+            }
+        }
+    }
+}
 
 /// Perform the minimal client-side handshake steps required before sending a Ping,
 /// then send a Ping and wait for the matching Pong with the provided timeout.
