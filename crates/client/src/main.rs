@@ -1,13 +1,18 @@
 use std::env;
 
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use game_edition::{GameEdition, GamePlatform};
 use protocol::{
     AnnouncedResource, ClientMessage, JoinGateDecision, JoinGateMode, JoinGateOutcome,
     PROTOCOL_VERSION, ProtocolCapability, ProtocolCompatibilityProfile, ProtocolVersionRange,
-    ResourceAvailabilityEntry, ResourceAvailabilityReport, ResourceAvailabilityStatus,
-    ServerMessage, SignatureVerificationStatus, check_announcement_signature_stub,
+    ResourceAnnouncement, ResourceAvailabilityEntry, ResourceAvailabilityReport,
+    ResourceAvailabilityStatus, ServerMessage, SignatureVerificationStatus, TrustedKey,
+    build_signature_verification_plan, check_announcement_signature_stub,
     current_protocol_profile, decode_server_line, encode_line, negotiate_protocol_dry_run,
+};
+use protocol::signature_engine::{
+    TrustedPublicKey, execute_verification_plan,
 };
 use resource_manifest::{
     CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind, ResourceManifest,
@@ -25,11 +30,44 @@ use tokio::{
 use tracing::info;
 
 #[derive(Debug, Clone, Deserialize)]
+struct TrustedKeyEntry {
+    key_id: String,
+    algorithm: String,
+    public_key_b64: String,
+}
+
+fn load_trusted_keys(path: &str) -> Result<Vec<TrustedPublicKey>> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read trusted keys file: {path}"))?;
+    let entries: Vec<TrustedKeyEntry> = toml::from_str(&raw)
+        .context("failed to parse trusted keys TOML")?;
+    entries
+        .into_iter()
+        .map(|entry| {
+            let key_bytes = base64::engine::general_purpose::STANDARD
+                .decode(&entry.public_key_b64)
+                .with_context(|| {
+                    format!(
+                        "failed to decode public_key_b64 for key '{}': invalid base64",
+                        entry.key_id
+                    )
+                })?;
+            Ok(TrustedPublicKey {
+                key_id: entry.key_id,
+                algorithm: entry.algorithm,
+                public_key: key_bytes,
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct ClientConfig {
     addr: String,
     name: String,
     message: String,
     resource_cache: Option<String>,
+    trusted_keys_file: Option<String>,
 }
 
 impl Default for ClientConfig {
@@ -39,6 +77,7 @@ impl Default for ClientConfig {
             name: "dummy-client".to_string(),
             message: "hello from client".to_string(),
             resource_cache: None,
+            trusted_keys_file: None,
         }
     }
 }
@@ -85,6 +124,14 @@ impl ClientConfig {
 
         if let Some(resource_cache) = read_flag(args, "--resource-cache") {
             cfg.resource_cache = Some(resource_cache);
+        }
+
+        if let Ok(file) = env::var("MEOWV_TRUSTED_KEYS") {
+            cfg.trusted_keys_file = Some(file);
+        }
+
+        if let Some(file) = read_flag(args, "--trusted-keys") {
+            cfg.trusted_keys_file = Some(file);
         }
 
         Ok(cfg)
@@ -147,6 +194,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(path) = read_flag(&args, "--verify-announcement-signature") {
+        return print_verify_announcement_signature(&path, &args);
+    }
+
     let config = ClientConfig::load(&args)?;
 
     let stream = TcpStream::connect(&config.addr).await?;
@@ -194,12 +245,17 @@ async fn main() -> Result<()> {
         )
         .await?;
 
+    let trusted_keys: Option<Vec<TrustedPublicKey>> = config
+        .trusted_keys_file
+        .as_deref()
+        .map(load_trusted_keys)
+        .transpose()?;
+
     while let Some(line) = lines.next_line().await? {
         let packet = decode_server_line(&line)?;
         match packet {
             ServerMessage::ResourceAnnouncement(announcement) => {
-                let signature_report = check_announcement_signature_stub(&announcement);
-                print_signature_report(&signature_report);
+                print_engine_verification(&announcement, trusted_keys.as_deref());
                 let report =
                     handle_resource_announcement(&announcement, config.resource_cache.as_deref())?;
                 writer_half
@@ -664,12 +720,61 @@ fn summarize_list(values: &[String]) -> String {
     }
 }
 
-fn print_signature_report(report: &protocol::SignatureVerificationReport) {
+fn print_engine_verification(
+    announcement: &ResourceAnnouncement,
+    trusted_keys: Option<&[TrustedPublicKey]>,
+) {
+    let stub_report = check_announcement_signature_stub(announcement);
     println!(
-        "Announcement Signature Status: {}",
-        format_signature_status(&report.status)
+        "Announcement Signature Status (stub): {}",
+        format_signature_status(&stub_report.status)
     );
-    println!("Signature Reason: {}", report.reason);
+    println!("Stub Reason: {}", stub_report.reason);
+
+    if let Some(keys) = trusted_keys {
+        let plan = build_signature_verification_plan(announcement, &keys_as_identity(keys), false);
+        let engine_report = execute_verification_plan(announcement, &plan, keys);
+        println!("Signature Verification Report (engine):");
+        print!("{}", engine_report.to_text());
+        println!("  (report-only: no enforcement was applied)");
+    } else {
+        println!("  (No trusted keys configured — engine verification skipped.)");
+    }
+}
+
+fn keys_as_identity(keys: &[TrustedPublicKey]) -> Vec<TrustedKey> {
+    keys.iter()
+        .map(|k| TrustedKey {
+            key_id: k.key_id.clone(),
+            algorithm: k.algorithm.clone(),
+        })
+        .collect()
+}
+
+fn print_verify_announcement_signature(path: &str, args: &[String]) -> Result<()> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read announcement file: {path}"))?;
+    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
+        .context("failed to parse ResourceAnnouncement JSON")?;
+
+    let trusted_keys = if let Some(key_path) = read_flag(args, "--trusted-keys") {
+        load_trusted_keys(&key_path)?
+    } else {
+        vec![]
+    };
+
+    let reject_unsigned = read_flag_exists(args, "--reject-unsigned");
+
+    let plan = build_signature_verification_plan(&announcement, &keys_as_identity(&trusted_keys), reject_unsigned);
+    println!("Verification Plan:");
+    print!("{}", plan.to_text());
+
+    let report = execute_verification_plan(&announcement, &plan, &trusted_keys);
+    println!("Verification Report:");
+    print!("{}", report.to_text());
+    println!("  (report-only: no enforcement was applied)");
+
+    Ok(())
 }
 
 fn format_signature_status(status: &SignatureVerificationStatus) -> &'static str {

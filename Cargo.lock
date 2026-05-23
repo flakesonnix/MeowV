@@ -67,10 +67,12 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "game_edition",
  "protocol",
  "resource_manifest",
  "serde",
+ "serde_json",
  "server_browser",
  "tokio",
  "toml",

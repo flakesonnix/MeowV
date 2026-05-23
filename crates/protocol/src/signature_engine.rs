@@ -662,4 +662,107 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn full_flow_plan_and_engine_valid() {
+        let (sk, vk) = test_keypair(10);
+        let mut announcement = test_announcement();
+        sign_announcement(&mut announcement, &sk, "my-key");
+
+        let trusted_identity = vec![TrustedKey {
+            key_id: "my-key".to_string(),
+            algorithm: "ed25519".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted_identity, false);
+
+        assert_eq!(plan.entries.len(), 1);
+        assert_eq!(plan.entries[0].action, crate::SignatureVerificationAction::VerifySignature);
+
+        let trusted_material = vec![TrustedPublicKey {
+            key_id: "my-key".to_string(),
+            algorithm: "ed25519".to_string(),
+            public_key: vk.to_bytes().to_vec(),
+        }];
+        let report = execute_verification_plan(&announcement, &plan, &trusted_material);
+
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].outcome, VerificationOutcome::Valid);
+        assert!(report.all_valid());
+        assert!(!report.is_empty());
+    }
+
+    #[test]
+    fn full_flow_reject_unsigned() {
+        let announcement = test_announcement(); // no signature
+        let plan = build_signature_verification_plan(&announcement, &[], true);
+
+        assert_eq!(plan.entries[0].action, crate::SignatureVerificationAction::WouldRejectUnsigned);
+
+        let report = execute_verification_plan(&announcement, &plan, &[]);
+        assert_eq!(report.entries.len(), 1);
+        assert!(matches!(
+            report.entries[0].outcome,
+            VerificationOutcome::Skipped { .. }
+        ));
+        assert!(!report.all_valid());
+    }
+
+    #[test]
+    fn full_flow_no_trusted_keys_skipped() {
+        let (sk, _vk) = test_keypair(20);
+        let mut announcement = test_announcement();
+        sign_announcement(&mut announcement, &sk, "orphan-key");
+
+        // No trusted identity → plan says UnknownKeyId → engine has no matching TrustedPublicKey
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        assert_eq!(plan.entries[0].action, crate::SignatureVerificationAction::UnknownKeyId);
+
+        let report = execute_verification_plan(&announcement, &plan, &[]);
+        assert_eq!(report.entries.len(), 1);
+        assert!(matches!(
+            report.entries[0].outcome,
+            VerificationOutcome::Invalid {
+                error: VerificationError::UnknownKeyId(_),
+            }
+        ));
+    }
+
+    #[test]
+    fn report_to_text_contains_all_fields() {
+        let (sk, vk) = test_keypair(30);
+        let mut announcement = test_announcement();
+        sign_announcement(&mut announcement, &sk, "key-30");
+
+        let trusted_identity = vec![TrustedKey {
+            key_id: "key-30".to_string(),
+            algorithm: "ed25519".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted_identity, false);
+        let trusted_material = vec![TrustedPublicKey {
+            key_id: "key-30".to_string(),
+            algorithm: "ed25519".to_string(),
+            public_key: vk.to_bytes().to_vec(),
+        }];
+        let report = execute_verification_plan(&announcement, &plan, &trusted_material);
+
+        let text = report.to_text();
+        assert!(text.contains("signature verification report:"));
+        assert!(text.contains("[valid]"));
+        assert!(text.contains("chat"));
+        assert!(text.contains("total:"));
+        assert!(text.contains("all valid: true"));
+    }
+
+    #[test]
+    fn report_to_text_empty() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![],
+            signature: None,
+        };
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        let report = execute_verification_plan(&announcement, &plan, &[]);
+        assert!(report.is_empty());
+        assert!(report.all_valid()); // empty → vacuously true
+        assert!(report.to_text().contains("(empty, no resources)"));
+    }
 }
