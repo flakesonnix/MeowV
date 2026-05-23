@@ -112,13 +112,30 @@ async fn helper_ignores_mismatched_pong() -> Result<()> {
 
 #[tokio::test]
 async fn helper_times_out_when_matching_pong_never_arrives() -> Result<()> {
+    // For this test we run a tiny custom server that will NOT reply with Pong to any Ping.
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
-    let state = Arc::new(SharedState::default());
-    let mut config = server_config(&addr.to_string());
-    // tweak server config if needed (none currently)
 
-    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+    // Spawn a small server task that accepts one connection and performs minimal handshake
+    let server_task = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let (r, mut w) = socket.split();
+            let mut reader = BufReader::new(r).lines();
+
+            // Read login from client
+            if let Ok(Some(_line)) = reader.next_line().await {
+                // send Welcome and ResourceAnnouncement
+                let welcome = encode_line(&ServerMessage::Welcome { client_id: uuid::Uuid::new_v4(), motd: "no-pong".to_string(), protocol_version: PROTOCOL_VERSION }).unwrap();
+                let announcement = encode_line(&ServerMessage::ResourceAnnouncement(protocol::ResourceAnnouncement { resources: vec![], signature: None })).unwrap();
+                let _ = w.write_all(welcome.as_bytes()).await;
+                let _ = w.write_all(announcement.as_bytes()).await;
+            }
+
+            // Now intentionally ignore any further client messages (do not respond with Pong)
+            // Keep the task alive for a short while to let the test timeout occur
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
 
     let stream = TcpStream::connect(addr).await?;
     let (reader_half, mut writer_half) = stream.into_split();
