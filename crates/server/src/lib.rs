@@ -284,8 +284,8 @@ fn next_entity_id(client_id: &Uuid) -> u32 {
 }
 
 fn build_example_resource_announcement() -> Option<ResourceAnnouncement> {
-    let resource_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/resources/chat");
+    let resource_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/resources/chat");
     let index = build_pack_index(resource_dir).ok()?;
     let files = index
         .files
