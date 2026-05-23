@@ -435,6 +435,82 @@ pub fn negotiate_protocol_dry_run(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Protocol Capability Gating (dry-run, report-only)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProtocolCapabilityError {
+    MissingCapability { capability: ProtocolCapability },
+}
+
+impl std::fmt::Display for ProtocolCapabilityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProtocolCapabilityError::MissingCapability { capability } => {
+                write!(f, "missing required capability: {capability:?}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityGateReport {
+    pub capability: ProtocolCapability,
+    pub supported: bool,
+    pub reason: String,
+}
+
+pub fn profile_supports_capability(
+    profile: &ProtocolCompatibilityProfile,
+    capability: ProtocolCapability,
+) -> bool {
+    profile.capabilities.contains(&capability)
+}
+
+pub fn shared_capabilities(
+    client: &ProtocolCompatibilityProfile,
+    server: &ProtocolCompatibilityProfile,
+) -> Vec<ProtocolCapability> {
+    let mut shared: Vec<ProtocolCapability> = client
+        .capabilities
+        .iter()
+        .filter(|c| server.capabilities.contains(c))
+        .cloned()
+        .collect();
+    shared.sort();
+    shared.dedup();
+    shared
+}
+
+pub fn requires_capability(
+    capability: ProtocolCapability,
+    shared: &[ProtocolCapability],
+) -> Result<(), ProtocolCapabilityError> {
+    if shared.contains(&capability) {
+        Ok(())
+    } else {
+        Err(ProtocolCapabilityError::MissingCapability { capability })
+    }
+}
+
+pub fn capability_gate_report(
+    capability: ProtocolCapability,
+    shared: &[ProtocolCapability],
+) -> CapabilityGateReport {
+    let supported = shared.contains(&capability);
+    let reason = if supported {
+        format!("{capability:?} present in shared capability set")
+    } else {
+        format!("{capability:?} not in shared capability set; not enforced in this milestone")
+    };
+    CapabilityGateReport {
+        capability,
+        supported,
+        reason,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,5 +1022,119 @@ mod tests {
             }],
             is_fully_available: false,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Capability gate tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn profile_supports_existing_capability() {
+        let profile = current_protocol_profile();
+        assert!(profile_supports_capability(
+            &profile,
+            ProtocolCapability::ResourceAnnouncement
+        ));
+    }
+
+    #[test]
+    fn profile_does_not_support_missing_capability() {
+        let profile = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 1, max: 1 },
+            capabilities: vec![ProtocolCapability::ResourceAnnouncement],
+        };
+        assert!(!profile_supports_capability(
+            &profile,
+            ProtocolCapability::JoinGateDryRun
+        ));
+    }
+
+    #[test]
+    fn shared_capabilities_intersection_deterministic() {
+        let client = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 1, max: 1 },
+            capabilities: vec![
+                ProtocolCapability::JoinGateDryRun,
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::SignatureMetadata,
+            ],
+        };
+        let server = ProtocolCompatibilityProfile {
+            version_range: ProtocolVersionRange { min: 1, max: 1 },
+            capabilities: vec![
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::JoinGateDryRun,
+            ],
+        };
+        let shared = shared_capabilities(&client, &server);
+        assert_eq!(
+            shared,
+            vec![
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::JoinGateDryRun,
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_required_capability_returns_error() {
+        let shared = vec![ProtocolCapability::ResourceAnnouncement];
+        let result = requires_capability(ProtocolCapability::JoinGateDryRun, &shared);
+        assert!(matches!(
+            result,
+            Err(ProtocolCapabilityError::MissingCapability {
+                capability: ProtocolCapability::JoinGateDryRun
+            })
+        ));
+    }
+
+    #[test]
+    fn present_required_capability_succeeds() {
+        let shared = vec![
+            ProtocolCapability::ResourceAnnouncement,
+            ProtocolCapability::JoinGateDryRun,
+        ];
+        assert!(requires_capability(ProtocolCapability::JoinGateDryRun, &shared).is_ok());
+    }
+
+    #[test]
+    fn current_protocol_profile_includes_expected_capabilities() {
+        let profile = current_protocol_profile();
+        assert!(profile_supports_capability(
+            &profile,
+            ProtocolCapability::ResourceAnnouncement
+        ));
+        assert!(profile_supports_capability(
+            &profile,
+            ProtocolCapability::ResourceAvailabilityReport
+        ));
+        assert!(profile_supports_capability(
+            &profile,
+            ProtocolCapability::JoinGateDryRun
+        ));
+        assert!(profile_supports_capability(
+            &profile,
+            ProtocolCapability::ResourceCompatibilityReport
+        ));
+        assert!(profile_supports_capability(
+            &profile,
+            ProtocolCapability::SignatureMetadata
+        ));
+    }
+
+    #[test]
+    fn capability_gate_report_supported() {
+        let shared = vec![ProtocolCapability::ResourceAnnouncement];
+        let report = capability_gate_report(ProtocolCapability::ResourceAnnouncement, &shared);
+        assert!(report.supported);
+        assert_eq!(report.capability, ProtocolCapability::ResourceAnnouncement);
+    }
+
+    #[test]
+    fn capability_gate_report_not_supported() {
+        let shared: Vec<ProtocolCapability> = vec![];
+        let report = capability_gate_report(ProtocolCapability::ResourceAnnouncement, &shared);
+        assert!(!report.supported);
+        assert_eq!(report.capability, ProtocolCapability::ResourceAnnouncement);
     }
 }
