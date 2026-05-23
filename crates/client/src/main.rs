@@ -3,8 +3,8 @@ use std::env;
 use anyhow::{Context, Result};
 use protocol::{decode_server_line, encode_line, ClientMessage, PROTOCOL_VERSION};
 use resource_manifest::{
-    build_pack_index, load_manifest_from_path, verify_cache_for_resource, CacheFileStatus,
-    ResourceManifest,
+    build_pack_index, discover_resources, load_manifest_from_path, resolve_load_order,
+    verify_cache_for_resource, CacheFileStatus, ResourceManifest,
 };
 use serde::Deserialize;
 use server_browser::{filter_current_protocol, LocalJsonServerListSource, ServerListSource};
@@ -94,6 +94,11 @@ async fn main() -> Result<()> {
 
     if let Some((resource_dir, cache_dir)) = read_pair_flag(&args, "--verify-cache") {
         print_cache_verification(&resource_dir, &cache_dir)?;
+        return Ok(());
+    }
+
+    if let Some(path) = read_flag(&args, "--resource-registry") {
+        print_resource_registry(&path)?;
         return Ok(());
     }
 
@@ -239,6 +244,32 @@ fn print_cache_verification(resource_dir: &str, cache_dir: &str) -> Result<()> {
         }
     );
 
+    Ok(())
+}
+
+fn print_resource_registry(path: &str) -> Result<()> {
+    let registry = discover_resources(path)?;
+    let load_order = resolve_load_order(&registry)?;
+
+    println!("Discovered Resources: {}", registry.resources.len());
+
+    for resource in registry.resources.values() {
+        let dependencies = if resource.manifest.dependencies.is_empty() {
+            "<none>".to_string()
+        } else {
+            resource
+                .manifest
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        println!("- {} | deps: {}", resource.name, dependencies);
+    }
+
+    println!("Load Order: {}", load_order.resources.join(" -> "));
     Ok(())
 }
 
