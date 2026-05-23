@@ -29,6 +29,15 @@ Protocol compatibility work:
 - upgrade/deprecation rules
 - wire-format change checklist
 
+## Milestone 0.5
+
+Game edition layer:
+
+- edition-aware metadata types
+- conservative placeholder detection
+- clean-room support policy docs
+- no runtime GTA V integration
+
 
 ## Milestone 2
 

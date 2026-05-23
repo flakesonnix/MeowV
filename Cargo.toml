@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/game_edition",
   "crates/protocol",
   "crates/server",
   "crates/client",
