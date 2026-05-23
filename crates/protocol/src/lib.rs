@@ -671,6 +671,147 @@ pub fn capability_gate_report(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Signature Verification Dry-Run Planner (M3.7 — no crypto, report-only)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedKey {
+    pub key_id: String,
+    pub algorithm: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureVerificationAction {
+    VerifySignature,
+    MissingSignature,
+    UnsupportedAlgorithm,
+    UnknownKeyId,
+    MalformedSignature,
+    WouldRejectUnsigned,
+    ResourceDigestMismatchPrecheck,
+}
+
+impl fmt::Display for SignatureVerificationAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::VerifySignature => write!(f, "verify_signature"),
+            Self::MissingSignature => write!(f, "missing_signature"),
+            Self::UnsupportedAlgorithm => write!(f, "unsupported_algorithm"),
+            Self::UnknownKeyId => write!(f, "unknown_key_id"),
+            Self::MalformedSignature => write!(f, "malformed_signature"),
+            Self::WouldRejectUnsigned => write!(f, "would_reject_unsigned"),
+            Self::ResourceDigestMismatchPrecheck => {
+                write!(f, "resource_digest_mismatch_precheck")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureVerificationPlanEntry {
+    pub resource_name: String,
+    pub action: SignatureVerificationAction,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureVerificationPlan {
+    pub entries: Vec<SignatureVerificationPlanEntry>,
+}
+
+impl SignatureVerificationPlan {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn to_text(&self) -> String {
+        if self.entries.is_empty() {
+            return "signature verification plan: (empty, no resources)\n".to_string();
+        }
+        let mut lines = format!("signature verification plan:\n");
+        for entry in &self.entries {
+            lines.push_str(&format!(
+                "  [{}] {} — {}\n",
+                entry.action, entry.resource_name, entry.reason
+            ));
+        }
+        lines.push_str(&format!("  total: {} resource(s)\n", self.entries.len()));
+        lines
+    }
+}
+
+pub fn build_signature_verification_plan(
+    announcement: &ResourceAnnouncement,
+    trusted_keys: &[TrustedKey],
+    reject_unsigned: bool,
+) -> SignatureVerificationPlan {
+    let mut entries: Vec<SignatureVerificationPlanEntry> = announcement
+        .resources
+        .iter()
+        .map(|resource| {
+            let (action, reason) = match &announcement.signature {
+                None => {
+                    if reject_unsigned {
+                        (
+                            SignatureVerificationAction::WouldRejectUnsigned,
+                            "announcement has no signature; policy would reject unsigned"
+                                .to_string(),
+                        )
+                    } else {
+                        (
+                            SignatureVerificationAction::MissingSignature,
+                            "announcement has no signature; would skip verification".to_string(),
+                        )
+                    }
+                }
+                Some(sig) => match validate_signature_metadata(sig) {
+                    Err(err) => match &err {
+                        SignatureMetadataError::UnsupportedAlgorithm(_) => (
+                            SignatureVerificationAction::UnsupportedAlgorithm,
+                            format!("signature metadata error: {err}"),
+                        ),
+                        _ => (
+                            SignatureVerificationAction::MalformedSignature,
+                            format!("signature metadata error: {err}"),
+                        ),
+                    },
+                    Ok(()) => {
+                        let key_trusted = trusted_keys
+                            .iter()
+                            .any(|k| k.key_id == sig.key_id && k.algorithm == sig.algorithm);
+                        if key_trusted {
+                            (
+                                SignatureVerificationAction::VerifySignature,
+                                format!(
+                                    "algorithm '{}', key '{}': trusted, would verify",
+                                    sig.algorithm, sig.key_id
+                                ),
+                            )
+                        } else {
+                            (
+                                SignatureVerificationAction::UnknownKeyId,
+                                format!(
+                                    "algorithm '{}', key '{}': not in trusted key set",
+                                    sig.algorithm, sig.key_id
+                                ),
+                            )
+                        }
+                    }
+                },
+            };
+            SignatureVerificationPlanEntry {
+                resource_name: resource.name.clone(),
+                action,
+                reason,
+            }
+        })
+        .collect();
+
+    entries.sort_by(|a, b| a.resource_name.cmp(&b.resource_name));
+    SignatureVerificationPlan { entries }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1575,4 +1716,303 @@ mod tests {
         assert!(err.to_string().contains("signature"));
     }
 
+    // -------------------------------------------------------------------
+    // Signature verification plan tests (M3.7)
+    // -------------------------------------------------------------------
+
+    fn sample_plan_announcement() -> ResourceAnnouncement {
+        ResourceAnnouncement {
+            resources: vec![
+                AnnouncedResource {
+                    name: "chat".to_string(),
+                    version: "0.1.0".to_string(),
+                    files: vec![AnnouncedResourceFile {
+                        relative_path: "resource.toml".to_string(),
+                        size_bytes: 123,
+                        sha256: "abc".to_string(),
+                    }],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Required,
+                },
+            ],
+            signature: Some(ResourceAnnouncementSignature {
+                algorithm: "ed25519".to_string(),
+                key_id: "dev-key".to_string(),
+                signature: "c29tZS1zaWc=".to_string(),
+            }),
+        }
+    }
+
+    fn sample_multi_resource_announcement() -> ResourceAnnouncement {
+        ResourceAnnouncement {
+            resources: vec![
+                AnnouncedResource {
+                    name: "admin".to_string(),
+                    version: "1.0.0".to_string(),
+                    files: vec![],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Optional,
+                },
+                AnnouncedResource {
+                    name: "chat".to_string(),
+                    version: "0.1.0".to_string(),
+                    files: vec![AnnouncedResourceFile {
+                        relative_path: "resource.toml".to_string(),
+                        size_bytes: 123,
+                        sha256: "abc".to_string(),
+                    }],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Required,
+                },
+                AnnouncedResource {
+                    name: "scoreboard".to_string(),
+                    version: "2.0.0".to_string(),
+                    files: vec![],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Optional,
+                },
+            ],
+            signature: Some(ResourceAnnouncementSignature {
+                algorithm: "ed25519".to_string(),
+                key_id: "prod-key".to_string(),
+                signature: "c29tZS1zaWc=".to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn plan_valid_signed_announcement_trusted_key() {
+        let announcement = sample_plan_announcement();
+        let trusted = vec![TrustedKey {
+            key_id: "dev-key".to_string(),
+            algorithm: "ed25519".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(plan.entries.len(), 1);
+        assert_eq!(plan.entries[0].action, SignatureVerificationAction::VerifySignature);
+        assert!(!plan.is_empty());
+    }
+
+    #[test]
+    fn plan_no_signature_no_reject_unsigned() {
+        let mut announcement = sample_plan_announcement();
+        announcement.signature = None;
+        let trusted = vec![];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(plan.entries[0].action, SignatureVerificationAction::MissingSignature);
+    }
+
+    #[test]
+    fn plan_no_signature_reject_unsigned() {
+        let mut announcement = sample_plan_announcement();
+        announcement.signature = None;
+        let trusted = vec![];
+        let plan = build_signature_verification_plan(&announcement, &trusted, true);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::WouldRejectUnsigned
+        );
+    }
+
+    #[test]
+    fn plan_unsupported_algorithm() {
+        let mut announcement = sample_plan_announcement();
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "rsa".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let trusted = vec![];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::UnsupportedAlgorithm
+        );
+    }
+
+    #[test]
+    fn plan_unknown_key_id() {
+        let announcement = sample_plan_announcement();
+        let trusted = vec![TrustedKey {
+            key_id: "other-key".to_string(),
+            algorithm: "ed25519".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(plan.entries[0].action, SignatureVerificationAction::UnknownKeyId);
+    }
+
+    #[test]
+    fn plan_malformed_signature_empty_algorithm() {
+        let mut announcement = sample_plan_announcement();
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let trusted = vec![];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::MalformedSignature
+        );
+    }
+
+    #[test]
+    fn plan_malformed_signature_empty_key_id() {
+        let mut announcement = sample_plan_announcement();
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let trusted = vec![];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::MalformedSignature
+        );
+    }
+
+    #[test]
+    fn plan_malformed_signature_empty_sig() {
+        let mut announcement = sample_plan_announcement();
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "dev-key".to_string(),
+            signature: "".to_string(),
+        });
+        let trusted = vec![];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::MalformedSignature
+        );
+    }
+
+    #[test]
+    fn plan_multiple_resources_sorted() {
+        let announcement = sample_multi_resource_announcement();
+        let trusted = vec![TrustedKey {
+            key_id: "prod-key".to_string(),
+            algorithm: "ed25519".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(plan.entries.len(), 3);
+        // must be sorted by resource name
+        assert_eq!(plan.entries[0].resource_name, "admin");
+        assert_eq!(plan.entries[1].resource_name, "chat");
+        assert_eq!(plan.entries[2].resource_name, "scoreboard");
+        for entry in &plan.entries {
+            assert_eq!(entry.action, SignatureVerificationAction::VerifySignature);
+        }
+    }
+
+    #[test]
+    fn plan_to_text_output_format() {
+        let announcement = sample_plan_announcement();
+        let trusted = vec![TrustedKey {
+            key_id: "dev-key".to_string(),
+            algorithm: "ed25519".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        let text = plan.to_text();
+        assert!(text.contains("signature verification plan:"));
+        assert!(text.contains("[verify_signature]"));
+        assert!(text.contains("chat"));
+        assert!(text.contains("total: 1 resource(s)"));
+    }
+
+    #[test]
+    fn plan_to_text_empty() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![],
+            signature: None,
+        };
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        let text = plan.to_text();
+        assert!(text.contains("(empty, no resources)"));
+        assert!(plan.is_empty());
+    }
+
+    #[test]
+    fn plan_action_display() {
+        assert_eq!(
+            SignatureVerificationAction::VerifySignature.to_string(),
+            "verify_signature"
+        );
+        assert_eq!(
+            SignatureVerificationAction::MissingSignature.to_string(),
+            "missing_signature"
+        );
+        assert_eq!(
+            SignatureVerificationAction::UnsupportedAlgorithm.to_string(),
+            "unsupported_algorithm"
+        );
+        assert_eq!(
+            SignatureVerificationAction::UnknownKeyId.to_string(),
+            "unknown_key_id"
+        );
+        assert_eq!(
+            SignatureVerificationAction::MalformedSignature.to_string(),
+            "malformed_signature"
+        );
+        assert_eq!(
+            SignatureVerificationAction::WouldRejectUnsigned.to_string(),
+            "would_reject_unsigned"
+        );
+        assert_eq!(
+            SignatureVerificationAction::ResourceDigestMismatchPrecheck.to_string(),
+            "resource_digest_mismatch_precheck"
+        );
+    }
+
+    #[test]
+    fn plan_key_trusted_any_algorithm_match() {
+        // key_id matches but algorithm differs → not trusted
+        let announcement = sample_plan_announcement();
+        let trusted = vec![TrustedKey {
+            key_id: "dev-key".to_string(),
+            algorithm: "rsa".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        assert_eq!(plan.entries[0].action, SignatureVerificationAction::UnknownKeyId);
+    }
+
+    #[test]
+    fn plan_no_trusted_keys_all_unknown() {
+        let announcement = sample_plan_announcement();
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        assert_eq!(plan.entries[0].action, SignatureVerificationAction::UnknownKeyId);
+    }
+
+    #[test]
+    fn plan_trusted_key_matches_case_sensitive() {
+        let mut announcement = sample_plan_announcement();
+        announcement.signature = Some(ResourceAnnouncementSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: "Dev-Key".to_string(),
+            signature: "c29tZS1zaWc=".to_string(),
+        });
+        let trusted = vec![TrustedKey {
+            key_id: "dev-key".to_string(),
+            algorithm: "ed25519".to_string(),
+        }];
+        let plan = build_signature_verification_plan(&announcement, &trusted, false);
+        // case-sensitive: Dev-Key != dev-key
+        assert_eq!(plan.entries[0].action, SignatureVerificationAction::UnknownKeyId);
+    }
+
+    #[test]
+    fn plan_empty_resources() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![],
+            signature: Some(ResourceAnnouncementSignature {
+                algorithm: "ed25519".to_string(),
+                key_id: "dev-key".to_string(),
+                signature: "c29tZS1zaWc=".to_string(),
+            }),
+        };
+        let plan = build_signature_verification_plan(&announcement, &[], false);
+        assert!(plan.is_empty());
+    }
 }
