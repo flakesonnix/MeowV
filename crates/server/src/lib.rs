@@ -1,6 +1,7 @@
 mod admin;
 mod config;
 mod diagnostics;
+mod enforcement;
 mod event_log;
 mod session;
 mod session_registry;
