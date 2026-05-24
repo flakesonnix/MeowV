@@ -27,7 +27,7 @@ async fn heartbeat_loop_sends_multiple_pings() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-test".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-test".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // consume welcome and announcement
     let _ = lines.next_line().await?;
@@ -74,7 +74,7 @@ async fn heartbeat_loop_stops_when_stop_signal_received() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-stop-test".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-stop-test".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // consume welcome and announcement
     let _ = lines.next_line().await?;
@@ -121,7 +121,7 @@ async fn heartbeat_shutdown_does_not_require_stdin_eof() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-no-stdin".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-no-stdin".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // consume welcome and announcement
     let _ = lines.next_line().await?;

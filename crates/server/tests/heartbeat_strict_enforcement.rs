@@ -69,8 +69,7 @@ async fn connect_and_complete_handshake(
     w.write_all(
         encode_line(&ClientMessage::Login {
             name: "strict_hb_test".to_string(),
-            protocol_version: PROTOCOL_VERSION,
-        })?
+            protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
         .as_bytes(),
     )
     .await?;

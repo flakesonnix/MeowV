@@ -59,8 +59,7 @@ async fn live_unsigned_announcement_report_only_accepts() -> Result<()> {
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
-                protocol_version: PROTOCOL_VERSION,
-            })?
+                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
             .as_bytes(),
         )
         .await?;
@@ -152,8 +151,7 @@ async fn live_unsigned_announcement_strict_would_reject() -> Result<()> {
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
-                protocol_version: PROTOCOL_VERSION,
-            })?
+                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
             .as_bytes(),
         )
         .await?;

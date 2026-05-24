@@ -4,10 +4,11 @@ use anyhow::Result;
 use protocol::{
     ClientMessage, DisconnectReason, PROTOCOL_VERSION, ResourceAnnouncement,
     ResourceAvailabilityEntry, ResourceAvailabilityReport, ResourceAvailabilityStatus,
-    ServerMessage, decode_server_line, encode_line,
+    ServerMessage, current_login_capabilities, decode_server_line, encode_line,
 };
 use server::{
-    ServerConfig, ServerRuntimeStatus, ServerSection, SharedState, run_with_listener_and_state,
+    HeartbeatSection, ServerConfig, ServerRuntimeStatus, ServerSection, SharedState,
+    run_with_listener_and_state,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -22,6 +23,10 @@ fn server_config(bind_addr: &str, motd: &str) -> ServerConfig {
             tick_rate: 20,
             motd: motd.to_string(),
             ..ServerSection::default()
+        },
+        heartbeat: HeartbeatSection {
+            server_ping_interval_ms: 0,
+            ..HeartbeatSection::default()
         },
         ..ServerConfig::default()
     }
@@ -54,6 +59,7 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
                 protocol_version: PROTOCOL_VERSION,
+                capabilities: current_login_capabilities(),
             })?
             .as_bytes(),
         )
@@ -70,11 +76,7 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
     }
 
     // Expect ResourceAnnouncement
-    let announcement = read_packet(&mut lines).await?;
-    let announcement = match announcement {
-        ServerMessage::ResourceAnnouncement(a) => a,
-        other => panic!("expected ResourceAnnouncement, got {other:?}"),
-    };
+    let announcement = read_until_announcement(&mut lines).await?;
     assert_eq!(announcement.resources.len(), 1);
     assert_eq!(announcement.resources[0].name, "chat");
 
@@ -93,6 +95,12 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
         let msg = read_packet(&mut lines).await?;
         match msg {
             ServerMessage::JoinGateDecision(d) => break d,
+            ServerMessage::ServerPing { sequence } => {
+                writer_half
+                    .write_all(encode_line(&ClientMessage::ServerPong { sequence })?.as_bytes())
+                    .await?;
+            }
+            ServerMessage::Pong { .. } => {}
             ServerMessage::ChatBroadcast { from, message } => {
                 if from == "server" && message == "alice joined" {
                     saw_chat_join = true;
@@ -121,6 +129,7 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
     assert!(!entry.failed);
     assert_eq!(entry.event_count, 11);
     assert_eq!(entry.protocol_version, Some(PROTOCOL_VERSION));
+    assert_eq!(entry.login_capabilities, Some(current_login_capabilities()));
 
     // --- Runtime status snapshot matches registry ---
     let status = ServerRuntimeStatus::from_config(&config).with_session_counts(
@@ -133,7 +142,7 @@ async fn full_handshake_creates_session_and_reaches_ready_dry_run() -> Result<()
     assert!(status_text.contains("ready_dry_run_sessions: 1"), "status: {status_text}");
     assert!(status_text.contains("failed_sessions: 0"), "status: {status_text}");
     assert!(status_text.contains("server_name: MeowV Local Dev Server"));
-    assert!(status_text.contains("protocol_version: 1"));
+    assert!(status_text.contains("protocol_version: 2"));
     assert!(status_text.contains("diagnostics_enabled: true"));
     assert!(!status_text.contains("client_ip"));
 
@@ -192,6 +201,7 @@ async fn version_mismatch_disconnects_and_cleans_up_session() -> Result<()> {
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
                 protocol_version: PROTOCOL_VERSION + 1,
+                capabilities: current_login_capabilities(),
             })?
             .as_bytes(),
         )
@@ -259,6 +269,38 @@ async fn invalid_handshake_first_message_not_login() -> Result<()> {
 }
 
 #[tokio::test]
+async fn missing_login_capability_payload_rejected() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let config = server_config(&addr.to_string(), "test");
+
+    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+
+    let stream = TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = BufReader::new(reader_half).lines();
+
+    writer_half
+        .write_all(
+            b"{\"type\":\"login\",\"name\":\"legacy\",\"protocol_version\":2}\n",
+        )
+        .await?;
+
+    let disconnect = read_packet(&mut lines).await?;
+    match disconnect {
+        ServerMessage::Disconnect { reason, message } => {
+            assert_eq!(reason, DisconnectReason::InvalidHandshake);
+            assert!(message.contains("capabilities"));
+        }
+        other => panic!("expected Disconnect, got {other:?}"),
+    }
+
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn registry_session_id_is_deterministic() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -279,6 +321,7 @@ async fn registry_session_id_is_deterministic() -> Result<()> {
             encode_line(&ClientMessage::Login {
                 name: "bob".to_string(),
                 protocol_version: PROTOCOL_VERSION,
+                capabilities: current_login_capabilities(),
             })?
             .as_bytes(),
         )
@@ -287,11 +330,7 @@ async fn registry_session_id_is_deterministic() -> Result<()> {
     let welcome = read_packet(&mut lines).await?;
     assert!(matches!(welcome, ServerMessage::Welcome { .. }));
 
-    let announcement = read_packet(&mut lines).await?;
-    let announcement = match announcement {
-        ServerMessage::ResourceAnnouncement(a) => a,
-        other => panic!("expected ResourceAnnouncement, got {other:?}"),
-    };
+    let announcement = read_until_announcement(&mut lines).await?;
 
     let report = build_available_report(&announcement);
     writer_half
@@ -306,6 +345,12 @@ async fn registry_session_id_is_deterministic() -> Result<()> {
         let msg = read_packet(&mut lines).await?;
         match msg {
             ServerMessage::JoinGateDecision(d) => break d,
+            ServerMessage::ServerPing { sequence } => {
+                writer_half
+                    .write_all(encode_line(&ClientMessage::ServerPong { sequence })?.as_bytes())
+                    .await?;
+            }
+            ServerMessage::Pong { .. } => {}
             ServerMessage::ChatBroadcast { from, message } => {
                 if from == "server" && message == "bob joined" {
                     saw_chat_join = true;
@@ -323,6 +368,7 @@ async fn registry_session_id_is_deterministic() -> Result<()> {
     assert_eq!(snap.sessions[0].id.to_string(), "session-1");
     assert_eq!(snap.sessions[0].event_count, 11);
     assert_eq!(snap.sessions[0].protocol_version, Some(PROTOCOL_VERSION));
+    assert_eq!(snap.sessions[0].login_capabilities, Some(current_login_capabilities()));
 
     drop(lines);
     drop(writer_half);
@@ -422,17 +468,14 @@ async fn runtime_status_reflects_live_session_counts() -> Result<()> {
         encode_line(&ClientMessage::Login {
             name: "alice".to_string(),
             protocol_version: PROTOCOL_VERSION,
+            capabilities: current_login_capabilities(),
         })?
         .as_bytes(),
     )
     .await?;
 
     let _welcome = read_packet(&mut l1).await?;
-    let announcement = read_packet(&mut l1).await?;
-    let announcement = match announcement {
-        ServerMessage::ResourceAnnouncement(a) => a,
-        other => panic!("expected ResourceAnnouncement, got {other:?}"),
-    };
+    let announcement = read_until_announcement(&mut l1).await?;
     let report = build_available_report(&announcement);
     w1.write_all(
         encode_line(&ClientMessage::ResourceAvailabilityReport(report))?
@@ -445,6 +488,11 @@ async fn runtime_status_reflects_live_session_counts() -> Result<()> {
         let msg = read_packet(&mut l1).await?;
         match msg {
             ServerMessage::JoinGateDecision(_) => break,
+            ServerMessage::ServerPing { sequence } => {
+                w1.write_all(encode_line(&ClientMessage::ServerPong { sequence })?.as_bytes())
+                    .await?;
+            }
+            ServerMessage::Pong { .. } => {}
             ServerMessage::ChatBroadcast { from, message } => {
                 if from == "server" && message == "alice joined" {
                     saw_chat = true;
@@ -519,4 +567,22 @@ where
         .await??
         .expect("stream closed before packet arrived");
     Ok(decode_server_line(&line)?)
+}
+
+async fn read_until_announcement<R>(
+    lines: &mut tokio::io::Lines<BufReader<R>>,
+) -> Result<ResourceAnnouncement>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    loop {
+        match read_packet(lines).await? {
+            ServerMessage::ResourceAnnouncement(announcement) => return Ok(announcement),
+            ServerMessage::ChatBroadcast { .. }
+            | ServerMessage::EntitySnapshot { .. }
+            | ServerMessage::ServerPing { .. }
+            | ServerMessage::Pong { .. } => continue,
+            other => panic!("expected ResourceAnnouncement, got {other:?}"),
+        }
+    }
 }

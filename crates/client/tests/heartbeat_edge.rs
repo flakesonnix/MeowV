@@ -48,7 +48,7 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // send login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "cli".to_string(), protocol_version: 1 })?.as_bytes()).await?;
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "cli".to_string(), protocol_version: 1, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // consume server welcome/announcement
     let _ = lines.next_line().await?;
@@ -126,7 +126,7 @@ async fn heartbeat_loop_timeout_continues_without_disconnect() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // send login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "cli".to_string(), protocol_version: 1 })?.as_bytes()).await?;
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "cli".to_string(), protocol_version: 1, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // don't rely on server welcome; proceed
 

@@ -52,8 +52,7 @@ async fn registry_cleans_up_after_enforced_heartbeat_disconnect() -> Result<()> 
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "enforcer".to_string(),
-                protocol_version: PROTOCOL_VERSION,
-            })?
+                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
             .as_bytes(),
         )
         .await?;
@@ -105,8 +104,7 @@ async fn report_only_heartbeat_policy_session_stays_connected() -> Result<()> {
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "observer".to_string(),
-                protocol_version: PROTOCOL_VERSION,
-            })?
+                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
             .as_bytes(),
         )
         .await?;
@@ -163,8 +161,7 @@ async fn strict_heartbeat_policy_session_stays_connected_when_healthy() -> Resul
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "strict-hb".to_string(),
-                protocol_version: PROTOCOL_VERSION,
-            })?
+                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
             .as_bytes(),
         )
         .await?;

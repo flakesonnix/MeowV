@@ -33,7 +33,7 @@ async fn handshake_then_ping_pong() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "bob".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "bob".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // Welcome
     let _welcome = read_packet(&mut lines).await?;

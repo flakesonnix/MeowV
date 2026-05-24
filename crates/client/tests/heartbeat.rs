@@ -33,7 +33,7 @@ async fn helper_sends_ping_and_receives_matching_pong() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // consume welcome and announcement
     let _ = read_packet(&mut lines).await?;
@@ -62,7 +62,7 @@ async fn helper_ignores_unrelated_server_messages() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // consume welcome and announcement
     let _ = read_packet(&mut lines).await?;
@@ -93,7 +93,7 @@ async fn helper_ignores_mismatched_pong() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // consume welcome and announcement
     let _ = read_packet(&mut lines).await?;
@@ -142,7 +142,7 @@ async fn helper_times_out_when_matching_pong_never_arrives() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "bob".to_string(), protocol_version: PROTOCOL_VERSION })?.as_bytes()).await?;
+    writer_half.write_all(encode_line(&ClientMessage::Login { name: "bob".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
 
     // consume welcome and announcement
     let _ = read_packet(&mut lines).await?;
