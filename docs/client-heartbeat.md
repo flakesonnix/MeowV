@@ -126,3 +126,12 @@ Strict Server-Side Heartbeat Enforcement (M4.20):
 - `SessionGuard` RAII removes the session from the registry on handler exit — all exit paths covered.
 - Under `ReportOnly` the enforcement block is skipped entirely; behavior is identical to M4.19.
 - `srv_heartbeat=would_disconnect` label is transient under `Strict`: the session is removed before it can be read in a stable registry snapshot.
+
+Enforcement Invariants (M4.21):
+
+Two disconnect paths exist with different delivery guarantees:
+
+- Handshake-phase enforcement (`handle_enforcement`): called before `writer_task` is spawned; uses `send_direct(writer, Disconnect)` — writes and flushes directly to the TCP half; Disconnect delivery is **guaranteed**.
+- Session-loop enforcement (scheduler tick): called after `writer_task` is spawned; uses `client_tx.send(Disconnect)` to queue the frame, then `break` exits the loop; after loop exit `writer_task.abort()` drops `writer_half`, closing the TCP write half. Disconnect frame delivery is **best-effort** (abort may preempt delivery). TCP close (EOF) is **guaranteed** via `writer_half` drop.
+
+Client-side disconnect detection must rely on EOF, not on receiving a `Disconnect` frame. The two heartbeat directions (client-initiated Ping/Pong vs server-initiated ServerPing/ServerPong) are entirely independent — enforcement on one direction does not affect the other.

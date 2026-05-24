@@ -66,6 +66,21 @@
 | 4.18 | Server-side ServerPing scheduler, report-only — per-session `interval_at` timer sends `ServerPing` after handshake; `ServerPong` replies recorded; `srv_ping_tx` / `srv_pong_rx` in registry + diagnostics; `server_ping_interval_ms` config; 7 integration tests; no enforcement |
 | 4.19 | Server-side heartbeat timeout status / planner — `ServerHeartbeatPlannerInput`, `ServerHeartbeatDecision` (NoActivity/Healthy/AwaitingPong/MissedPong/WouldDisconnect), `evaluate_server_heartbeat`; `srv_heartbeat=<label>` in registry diagnostics and admin sessions; `server_heartbeat_decision` in `SessionDiagnostics`; 15 planner unit tests + 7 registry/admin unit tests + 6 integration tests; no enforcement |
 | 4.20 | Strict server-side heartbeat enforcement — `Strict` policy + `WouldDisconnect` decision → clean disconnect in scheduler tick arm; `SessionEventKind::Failed` recorded with structured reason; registry updated to `Failed` before removal; diagnostics emitted on enforcement; `ReportOnly` unchanged; 5 integration tests |
+| 4.21 | Heartbeat enforcement polish / invariants — code comments documenting best-effort Disconnect vs guaranteed EOF (writer_half drop); `handle_enforcement` doc note for direct-write path; `heartbeat-authority-design.md` implementation status; 1 deterministic integration test (`strict_enforcement_independent_of_client_ping_activity`) |
+
+---
+
+## Milestone 4.21
+
+Heartbeat enforcement polish / invariants:
+
+- Code comments in `lib.rs` around the scheduler tick enforcement path:
+  - Before `client_tx.send(Disconnect)`: documents best-effort nature — queued message may not flush before `writer_task.abort()` preempts the writer
+  - Before `writer_task.abort()`: documents authoritative TCP close — abort drops `writer_half`, delivering EOF on all loop exit paths
+  - `handle_enforcement` doc extended with note that it is called pre-spawn with direct write access (guaranteed delivery)
+- `docs/heartbeat-authority-design.md` updated with implementation status section covering M4.16–M4.20 outcomes and confirming Option B (server-initiated Ping/Pong) was implemented as designed
+- One new deterministic integration test: `strict_enforcement_independent_of_client_ping_activity` — client sends client-initiated Pings throughout but never replies to `ServerPong`; verifies Strict enforcement fires on the server-initiated direction independently
+- No protocol changes, no flaky tests on Disconnect frame delivery, no enforcement behavior changes
 
 ---
 

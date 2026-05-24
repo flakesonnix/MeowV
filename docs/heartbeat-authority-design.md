@@ -178,3 +178,39 @@ enforcement milestone.
 - No live enforcement changes.
 - No resource/cache/signature changes.
 - No client disconnect triggered by this design document.
+
+---
+
+## Implementation Status (updated M4.21)
+
+Option B was implemented across M4.16–M4.20. The "M4.16/M4.17" labels in the
+recommended path section above (which originally referred to future client-reported
+health) were superseded — the actual milestones went directly to server-initiated
+Ping/Pong.
+
+| Design milestone | Actual milestone | Outcome |
+|-----------------|-----------------|---------|
+| Auth design doc | M4.15 | Doc only; no live changes |
+| Server-initiated Ping/Pong stub | M4.16 | `ServerPing`/`ServerPong` DTOs; server handler inert |
+| Client replies to ServerPing | M4.17 | Client receive loop and heartbeat path reply `ServerPong` |
+| Server scheduler | M4.18 | Per-session `interval_at` timer; `srv_ping_tx`/`srv_pong_rx` counts; no enforcement |
+| Server planner | M4.19 | `evaluate_server_heartbeat`; `srv_heartbeat=<label>` in registry/diagnostics; no enforcement |
+| Strict enforcement | M4.20 | `WouldDisconnect` → `session.fail()` + break; TCP close via `writer_half` drop |
+
+### Enforcement Invariants (M4.20+)
+
+Two distinct disconnect paths exist:
+
+**Handshake phase** (`handle_enforcement`, pre-spawn):
+- `writer_half` is owned by `handle_client` directly
+- `send_direct(writer, Disconnect)` writes and flushes before returning
+- Disconnect frame delivery is **guaranteed**
+
+**Session loop phase** (scheduler tick arm, post-spawn):
+- `writer_half` is owned by `writer_task` (moved at spawn)
+- `client_tx.send(Disconnect)` queues the frame in the writer task's channel
+- `writer_task.abort()` (after loop exit) drops `writer_half`, closing the TCP write half
+- Frame delivery is **best-effort**: `abort()` may preempt the writer before it flushes
+- TCP close (EOF) is **guaranteed** via `writer_half` drop on abort
+
+Client-side detection should rely on EOF, not on receiving a `Disconnect` frame.
