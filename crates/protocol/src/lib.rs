@@ -239,16 +239,16 @@ pub enum ResourceFetchMetadataError {
 impl std::fmt::Display for ResourceFetchMetadataError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResourceFetchMetadataError::UnsupportedScheme(s) => write!(f, "unsupported scheme: {s}"),
-            
-            ResourceFetchMetadataError::DigestMismatch { expected, found } => write!(
-                f,
-                "digest mismatch: expected {expected}, found {found}"
-            ),
-            ResourceFetchMetadataError::SizeMismatch { expected, found } => write!(
-                f,
-                "size mismatch: expected {expected}, found {found}"
-            ),
+            ResourceFetchMetadataError::UnsupportedScheme(s) => {
+                write!(f, "unsupported scheme: {s}")
+            }
+
+            ResourceFetchMetadataError::DigestMismatch { expected, found } => {
+                write!(f, "digest mismatch: expected {expected}, found {found}")
+            }
+            ResourceFetchMetadataError::SizeMismatch { expected, found } => {
+                write!(f, "size mismatch: expected {expected}, found {found}")
+            }
             ResourceFetchMetadataError::DuplicateSource { scheme, uri } => {
                 write!(f, "duplicate source: {}:{}", scheme, uri)
             }
@@ -282,7 +282,11 @@ pub fn validate_and_order_sources(
         let scheme = s.scheme.as_str();
         match scheme {
             "https" | "file" | "ipfs" => {}
-            other => return Err(ResourceFetchMetadataError::UnsupportedScheme(other.to_string())),
+            other => {
+                return Err(ResourceFetchMetadataError::UnsupportedScheme(
+                    other.to_string(),
+                ));
+            }
         }
 
         // duplicate check
@@ -303,21 +307,21 @@ pub fn validate_and_order_sources(
         }
 
         // If source provides sha256/size they must match file-level values
-        if let Some(ref sha) = s.sha256 {
-            if sha != &file.sha256 {
-                return Err(ResourceFetchMetadataError::DigestMismatch {
-                    expected: file.sha256.clone(),
-                    found: sha.clone(),
-                });
-            }
+        if let Some(ref sha) = s.sha256
+            && sha != &file.sha256
+        {
+            return Err(ResourceFetchMetadataError::DigestMismatch {
+                expected: file.sha256.clone(),
+                found: sha.clone(),
+            });
         }
-        if let Some(size) = s.size_bytes {
-            if size != file.size_bytes {
-                return Err(ResourceFetchMetadataError::SizeMismatch {
-                    expected: file.size_bytes,
-                    found: size,
-                });
-            }
+        if let Some(size) = s.size_bytes
+            && size != file.size_bytes
+        {
+            return Err(ResourceFetchMetadataError::SizeMismatch {
+                expected: file.size_bytes,
+                found: size,
+            });
         }
     }
 
@@ -327,7 +331,11 @@ pub fn validate_and_order_sources(
         let pa = a.priority.unwrap_or(100);
         let pb = b.priority.unwrap_or(100);
         pa.cmp(&pb)
-            .then(a.id.clone().unwrap_or_default().cmp(&b.id.clone().unwrap_or_default()))
+            .then(
+                a.id.clone()
+                    .unwrap_or_default()
+                    .cmp(&b.id.clone().unwrap_or_default()),
+            )
             .then(a.uri.cmp(&b.uri))
     });
 
@@ -2778,20 +2786,18 @@ mod tests {
 
     fn sample_plan_announcement() -> ResourceAnnouncement {
         ResourceAnnouncement {
-            resources: vec![
-                AnnouncedResource {
-                    name: "chat".to_string(),
-                    version: "0.1.0".to_string(),
-                    files: vec![AnnouncedResourceFile {
-                        relative_path: "resource.toml".to_string(),
-                        size_bytes: 123,
-                        sha256: "abc".to_string(),
-                        sources: None,
-                    }],
-                    protocol_version: PROTOCOL_VERSION,
-                    requirement_level: ResourceRequirementLevel::Required,
-                },
-            ],
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: None,
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
             signature: Some(ResourceAnnouncementSignature {
                 algorithm: "ed25519".to_string(),
                 key_id: "dev-key".to_string(),
@@ -2887,11 +2893,14 @@ mod tests {
 
         let ordered = validate_and_order_sources(&file).unwrap();
         let uris: Vec<String> = ordered.into_iter().map(|s| s.uri).collect();
-        assert_eq!(uris, vec![
-            "https://example.com/a".to_string(),
-            "https://example.com/b".to_string(),
-            "https://example.com/z".to_string(),
-        ]);
+        assert_eq!(
+            uris,
+            vec![
+                "https://example.com/a".to_string(),
+                "https://example.com/b".to_string(),
+                "https://example.com/z".to_string(),
+            ]
+        );
     }
 
     #[test]

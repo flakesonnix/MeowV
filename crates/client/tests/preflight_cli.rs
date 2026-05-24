@@ -209,6 +209,7 @@ fn preflight_json_output_can_be_written_to_file() -> Result<()> {
                 relative_path: "resource.toml".to_string(),
                 size_bytes: 123,
                 sha256: "abc".to_string(),
+                sources: None,
             }],
             protocol_version: protocol::PROTOCOL_VERSION,
             requirement_level: ResourceRequirementLevel::Required,
