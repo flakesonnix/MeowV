@@ -16,6 +16,7 @@ pub struct ServerRuntimeStatus {
     pub exact_version_required: bool,
     pub negotiation_dry_run: bool,
     pub capability_gates_report_only: bool,
+    pub capability_policy: String,
     pub join_gate_mode: String,
     pub connected_sessions: usize,
     pub ready_dry_run_sessions: usize,
@@ -41,6 +42,10 @@ impl ServerRuntimeStatus {
             exact_version_required: config.protocol.exact_version_required,
             negotiation_dry_run: config.protocol.negotiation_dry_run,
             capability_gates_report_only: config.protocol.capability_gates_report_only,
+            capability_policy: match config.protocol.capability_policy {
+                crate::CapabilityPolicy::ReportOnly => "report_only".to_string(),
+                crate::CapabilityPolicy::Strict => "strict".to_string(),
+            },
             join_gate_mode: match config.join_gate.mode {
                 JoinGateConfigMode::DryRun => "dry_run".to_string(),
             },
@@ -87,13 +92,14 @@ impl ServerRuntimeStatus {
     /// Deterministic human-readable text dump. No timestamps. No client IPs.
     pub fn to_text(&self) -> String {
         format!(
-            "server_name: {}\n\
-             bind_addr: {}\n\
-             protocol_version: {}\n\
-             exact_version_required: {}\n\
-             negotiation_dry_run: {}\n\
-             capability_gates_report_only: {}\n\
-             join_gate_mode: {}\n\
+             "server_name: {}\n\
+              bind_addr: {}\n\
+              protocol_version: {}\n\
+              exact_version_required: {}\n\
+              negotiation_dry_run: {}\n\
+              capability_gates_report_only: {}\n\
+              capability_policy: {}\n\
+              join_gate_mode: {}\n\
              connected_sessions: {}\n\
              ready_dry_run_sessions: {}\n\
              failed_sessions: {}\n\
@@ -111,6 +117,7 @@ impl ServerRuntimeStatus {
             self.exact_version_required,
             self.negotiation_dry_run,
             self.capability_gates_report_only,
+            self.capability_policy,
             self.join_gate_mode,
             self.connected_sessions,
             self.ready_dry_run_sessions,

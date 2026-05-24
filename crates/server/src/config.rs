@@ -50,6 +50,7 @@ pub struct ProtocolSection {
     pub exact_version_required: bool,
     pub negotiation_dry_run: bool,
     pub capability_gates_report_only: bool,
+    pub capability_policy: CapabilityPolicy,
 }
 
 impl Default for ProtocolSection {
@@ -58,7 +59,21 @@ impl Default for ProtocolSection {
             exact_version_required: true,
             negotiation_dry_run: true,
             capability_gates_report_only: true,
+            capability_policy: CapabilityPolicy::ReportOnly,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityPolicy {
+    ReportOnly,
+    Strict,
+}
+
+impl Default for CapabilityPolicy {
+    fn default() -> Self {
+        Self::ReportOnly
     }
 }
 
@@ -405,6 +420,7 @@ join gate enforcement is not yet supported"
              exact_version_required: {}\n\
              negotiation_dry_run: {}\n\
              capability_gates_report_only: {}\n\
+             capability_policy: {}\n\
              resource_announcement_dir: {}\n\
              join_gate_mode: dry_run\n\
              join_gate_enforcement: disabled\n\
@@ -422,6 +438,10 @@ join gate enforcement is not yet supported"
             self.protocol.exact_version_required,
             self.protocol.negotiation_dry_run,
             self.protocol.capability_gates_report_only,
+            match self.protocol.capability_policy {
+                CapabilityPolicy::ReportOnly => "report_only",
+                CapabilityPolicy::Strict => "strict",
+            },
             self.resources.announcement_resource_dir,
             self.diagnostics.print_session_diagnostics,
             match self.diagnostics.format {

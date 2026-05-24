@@ -12,7 +12,8 @@ mod status;
 pub use config::{
     AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, EnforcementSection,
     HeartbeatSection, JoinGateConfigMode, JoinGateSection, LogFormat, LogLevel, LoggingSection,
-    ProtocolSection, ResourcesSection, ServerConfig, ServerSection, SignatureSection,
+    CapabilityPolicy, ProtocolSection, ResourcesSection, ServerConfig, ServerSection,
+    SignatureSection,
 };
 pub use enforcement::{SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement};
 pub use heartbeat_planner::{
@@ -478,6 +479,50 @@ async fn handle_client(
                         reason = %negotiation.reason,
                         "protocol negotiation dry-run: non-exact overlap detected"
                     );
+                }
+                if config.protocol.capability_policy == CapabilityPolicy::Strict
+                    && capability_negotiation.decision
+                        == protocol::CapabilityNegotiationDecision::WouldReject
+                {
+                    let reason = capability_negotiation
+                        .violations
+                        .first()
+                        .map(|violation| violation.to_text())
+                        .unwrap_or_else(|| {
+                            "capability negotiation rejected under strict policy".to_string()
+                        });
+                    session.fail(reason.clone());
+                    event_log.record(
+                        SessionEventKind::Failed,
+                        SessionState::Failed,
+                        format!("capability enforcement: {reason}"),
+                    );
+                    {
+                        let mut reg = state.registry.lock().unwrap();
+                        reg.set_capability_negotiation(&session_id, capability_negotiation.clone());
+                        reg.update_session(&session_id, SessionState::Failed, event_log.len());
+                    }
+                    if config.diagnostics.print_session_diagnostics {
+                        let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                            .with_capability_negotiation(&capability_negotiation)
+                            .with_enforcement(&config.enforcement.mode)
+                            .with_heartbeat_policy(&config.heartbeat.policy);
+                        let text = match config.diagnostics.format {
+                            Fmt::Text => diag.to_text(),
+                            Fmt::JsonStub => diag.to_json_stub(),
+                        };
+                        info!(%client_id, "session diagnostics (capability strict reject):\n{text}");
+                    }
+                    send_direct(
+                        &mut writer_half,
+                        &ServerMessage::Disconnect {
+                            reason: DisconnectReason::InvalidHandshake,
+                            message: format!("capability policy strict reject: {reason}"),
+                        },
+                    )
+                    .await?;
+                    info!(%client_id, reason = %reason, "session: strict capability policy rejected login");
+                    return Ok(());
                 }
                 if let Err(e) = session.on_negotiation_logged() {
                     warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
