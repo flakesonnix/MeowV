@@ -361,6 +361,87 @@ pub fn select_fetch_source(
     (Some(selected), fallbacks)
 }
 
+/// The set of fetch schemes allowed by the default source policy.
+pub const DEFAULT_ALLOWED_FETCH_SCHEMES: &[&str] = &["https", "file", "ipfs"];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceFetchSourcePolicyDecision {
+    Allowed,
+    #[serde(rename = "blocked")]
+    Blocked {
+        reason: String,
+    },
+}
+
+impl ResourceFetchSourcePolicyDecision {
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+
+    pub fn to_label(&self) -> String {
+        match self {
+            Self::Allowed => "allowed".to_string(),
+            Self::Blocked { reason } => format!("blocked:{}", reason),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceFetchSourcePolicyReport {
+    pub decision: ResourceFetchSourcePolicyDecision,
+    pub scheme: String,
+    pub allowed_schemes: Vec<String>,
+}
+
+impl ResourceFetchSourcePolicyReport {
+    pub fn allowed(scheme: &str, allowed_schemes: Vec<String>) -> Self {
+        Self {
+            decision: ResourceFetchSourcePolicyDecision::Allowed,
+            scheme: scheme.to_string(),
+            allowed_schemes,
+        }
+    }
+
+    pub fn blocked(scheme: &str, reason: &str, allowed_schemes: Vec<String>) -> Self {
+        Self {
+            decision: ResourceFetchSourcePolicyDecision::Blocked {
+                reason: reason.to_string(),
+            },
+            scheme: scheme.to_string(),
+            allowed_schemes,
+        }
+    }
+}
+
+/// Evaluate whether a fetch source satisfies the default source policy.
+///
+/// Currently permissive: all schemes in `DEFAULT_ALLOWED_FETCH_SCHEMES` are
+/// allowed. This function exists as a pure, deterministic, report-only policy
+/// evaluation point. It does not perform network access, cache writes,
+/// or execution.
+///
+/// The policy can be extended in future milestones to block specific schemes
+/// or source attributes without changing the evaluation interface.
+pub fn evaluate_fetch_source_policy(
+    source: &ResourceFetchSource,
+) -> ResourceFetchSourcePolicyReport {
+    let allowed: Vec<String> = DEFAULT_ALLOWED_FETCH_SCHEMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    if allowed.contains(&source.scheme) {
+        ResourceFetchSourcePolicyReport::allowed(&source.scheme, allowed)
+    } else {
+        ResourceFetchSourcePolicyReport::blocked(
+            &source.scheme,
+            &format!("scheme '{}' not in allowed set", source.scheme),
+            allowed,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceAvailabilityStatus {
@@ -475,6 +556,10 @@ pub struct ResourceDownloadPreflightEntry {
     /// Remaining valid sources after the primary selection, in deterministic order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_sources: Vec<ResourceFetchSource>,
+    /// Policy evaluation for the selected fetch source, if any.
+    /// `None` when no source is selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_policy: Option<ResourceFetchSourcePolicyReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -529,6 +614,13 @@ impl ResourceDownloadPreflightPlan {
                 lines.push(format!(
                     "    fallback sources: {}",
                     entry.fallback_sources.len()
+                ));
+            }
+            if let Some(ref policy) = entry.source_policy {
+                lines.push(format!(
+                    "    source policy: {} {}",
+                    policy.decision.to_label(),
+                    policy.scheme
                 ));
             }
         }
@@ -988,6 +1080,7 @@ pub fn build_resource_download_preflight_plan(
                 Err(e) => (vec![e.to_string()], Vec::new()),
             };
             let (selected_source, fallback_sources) = select_fetch_source(&valid_sources);
+            let source_policy = selected_source.as_ref().map(evaluate_fetch_source_policy);
 
             let (action, reason) = if unsupported {
                 (
@@ -1038,6 +1131,7 @@ pub fn build_resource_download_preflight_plan(
                 valid_sources: valid_sources.clone(),
                 selected_source: selected_source.clone(),
                 fallback_sources: fallback_sources.clone(),
+                source_policy: source_policy.clone(),
             });
 
             if !blocked_by_signature
@@ -1054,6 +1148,7 @@ pub fn build_resource_download_preflight_plan(
                     valid_sources: valid_sources.clone(),
                     selected_source: selected_source.clone(),
                     fallback_sources: fallback_sources.clone(),
+                    source_policy: source_policy.clone(),
                 });
             }
         }
@@ -3217,6 +3312,387 @@ mod tests {
         // Round-trip: deserialize and re-serialize should match
         let deserialized: ResourceDownloadPreflightPlan = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, plan);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fetch source policy planning tests (M6.7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evaluate_source_policy_https_allowed() {
+        let source = ResourceFetchSource {
+            id: None,
+            scheme: "https".to_string(),
+            uri: "https://example.com/f".to_string(),
+            size_bytes: None,
+            sha256: None,
+            compression: None,
+            media_type: None,
+            priority: None,
+            mirrors: None,
+        };
+        let report = evaluate_fetch_source_policy(&source);
+        assert!(report.decision.is_allowed());
+        assert_eq!(report.scheme, "https");
+        assert!(report.allowed_schemes.contains(&"https".to_string()));
+    }
+
+    #[test]
+    fn evaluate_source_policy_file_allowed() {
+        let source = ResourceFetchSource {
+            id: None,
+            scheme: "file".to_string(),
+            uri: "/path/to/file".to_string(),
+            ..sample_source()
+        };
+        let report = evaluate_fetch_source_policy(&source);
+        assert!(report.decision.is_allowed());
+        assert_eq!(report.scheme, "file");
+    }
+
+    #[test]
+    fn evaluate_source_policy_ipfs_allowed() {
+        let source = ResourceFetchSource {
+            id: None,
+            scheme: "ipfs".to_string(),
+            uri: "QmHash".to_string(),
+            ..sample_source()
+        };
+        let report = evaluate_fetch_source_policy(&source);
+        assert!(report.decision.is_allowed());
+        assert_eq!(report.scheme, "ipfs");
+    }
+
+    #[test]
+    fn evaluate_source_policy_unknown_scheme_blocked() {
+        let source = ResourceFetchSource {
+            id: None,
+            scheme: "ftp".to_string(),
+            uri: "ftp://example.com/f".to_string(),
+            ..sample_source()
+        };
+        let report = evaluate_fetch_source_policy(&source);
+        assert!(!report.decision.is_allowed());
+        match &report.decision {
+            ResourceFetchSourcePolicyDecision::Blocked { reason } => {
+                assert!(
+                    reason.contains("ftp"),
+                    "blocked reason should mention scheme: {reason}"
+                );
+            }
+            _ => panic!("expected blocked decision"),
+        }
+        assert_eq!(report.scheme, "ftp");
+    }
+
+    #[test]
+    fn preflight_source_policy_in_text() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: None,
+                        scheme: "https".to_string(),
+                        uri: "https://example.com/f".to_string(),
+                        size_bytes: None,
+                        sha256: None,
+                        compression: None,
+                        media_type: None,
+                        priority: None,
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let text = plan.to_text();
+        assert!(
+            text.contains("source policy: allowed https"),
+            "text should show source policy allowed:\n{text}"
+        );
+    }
+
+    #[test]
+    fn preflight_source_policy_none_when_no_selected_source() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: None,
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        for entry in &plan.entries {
+            assert!(
+                entry.source_policy.is_none(),
+                "source_policy should be None when no sources declared"
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_source_policy_no_behavior_change() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: None,
+                        scheme: "https".to_string(),
+                        uri: "https://example.com/f".to_string(),
+                        size_bytes: None,
+                        sha256: None,
+                        compression: None,
+                        media_type: None,
+                        priority: None,
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        for status in &[
+            ResourceAvailabilityStatus::Available,
+            ResourceAvailabilityStatus::Missing,
+            ResourceAvailabilityStatus::SizeMismatch,
+            ResourceAvailabilityStatus::HashMismatch,
+        ] {
+            let report = sample_report(status.clone());
+            let plan = build_resource_download_preflight_plan(
+                &announcement,
+                &report,
+                &SignatureVerificationReport {
+                    status: SignatureVerificationStatus::Valid,
+                    reason: "signature valid".to_string(),
+                },
+                &signature_engine::SignaturePolicy::ReportOnly,
+                None,
+            );
+            for entry in &plan.entries {
+                // Action/reason unchanged from pre-M6.7
+                match entry.action {
+                    ResourceDownloadPreflightAction::AlreadyAvailable => {
+                        assert_eq!(entry.reason, "resource file already available locally");
+                    }
+                    ResourceDownloadPreflightAction::FetchMissing => {
+                        assert_eq!(entry.reason, "resource file missing from local cache");
+                    }
+                    ResourceDownloadPreflightAction::ReplaceInvalid => {
+                        assert_eq!(entry.reason, "resource file present but invalid locally");
+                    }
+                    ResourceDownloadPreflightAction::WouldVerifyAfterFetch => {
+                        assert_eq!(
+                            entry.reason,
+                            "downloaded file would require post-fetch verification"
+                        );
+                    }
+                    _ => {}
+                }
+                // Source policy should be present since selected source exists
+                assert!(
+                    entry.source_policy.is_some(),
+                    "source_policy should be present for status={:?}",
+                    status
+                );
+                assert!(
+                    entry.source_policy.as_ref().unwrap().decision.is_allowed(),
+                    "source_policy should be allowed for status={:?}",
+                    status
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preflight_source_policy_deterministic_output() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![
+                        ResourceFetchSource {
+                            id: None,
+                            scheme: "https".to_string(),
+                            uri: "https://a.example.com/f".to_string(),
+                            size_bytes: None,
+                            sha256: None,
+                            compression: None,
+                            media_type: None,
+                            priority: Some(10),
+                            mirrors: None,
+                        },
+                        ResourceFetchSource {
+                            id: None,
+                            scheme: "file".to_string(),
+                            uri: "/local/path".to_string(),
+                            size_bytes: None,
+                            sha256: None,
+                            compression: None,
+                            media_type: None,
+                            priority: Some(20),
+                            mirrors: None,
+                        },
+                    ]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        assert_eq!(plan.to_text(), plan.to_text());
+        assert_eq!(
+            serde_json::to_string_pretty(&plan).unwrap(),
+            serde_json::to_string_pretty(&plan).unwrap()
+        );
+        // Policy should be present and allowed for both entries
+        for entry in &plan.entries {
+            assert!(entry.source_policy.is_some());
+            assert!(entry.source_policy.as_ref().unwrap().decision.is_allowed());
+        }
+    }
+
+    #[test]
+    fn preflight_source_policy_json_serialization() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: None,
+                        scheme: "https".to_string(),
+                        uri: "https://example.com/f".to_string(),
+                        size_bytes: None,
+                        sha256: None,
+                        compression: None,
+                        media_type: None,
+                        priority: None,
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let json = serde_json::to_string_pretty(&plan).unwrap();
+        assert!(
+            json.contains("source_policy"),
+            "JSON should include source_policy:\n{json}"
+        );
+        assert!(
+            json.contains("\"decision\": \"allowed\""),
+            "JSON should show allowed decision:\n{json}"
+        );
+        // Round-trip: deserialize and re-serialize should match
+        let deserialized: ResourceDownloadPreflightPlan = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, plan);
+    }
+
+    #[test]
+    fn preflight_source_policy_absent_in_json_when_no_sources() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: None,
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let json = serde_json::to_string_pretty(&plan).unwrap();
+        assert!(
+            !json.contains("source_policy"),
+            "JSON should omit source_policy when no sources:\n{json}"
+        );
     }
 
     fn sort_sources(sources: &mut [ResourceFetchSource]) {

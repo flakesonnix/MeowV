@@ -76,6 +76,7 @@
 | 6.0 | Resource download preflight / safe fetch planning — pure deterministic report-only planner for fetch/replace/block actions; no network, no writes, no execution |
 | 6.5 | Fetch source metadata preflight reporting — validate source schemes, deduplicate, sort; per-entry source_errors and valid_sources in preflight output; report-only, no fetch |
 | 6.6 | Fetch source selection planning — deterministic candidate selection by priority/id/uri; selected_source and fallback_sources per preflight entry; report-only, no fetch |
+| 6.7 | Fetch source policy planning — evaluate selected source against allowed schemes; source_policy report per entry; report-only, no fetch |
 
 ---
 
@@ -233,6 +234,36 @@ Fetch source selection planning:
   - `preflight_selected_source_no_behavior_change` — selection does not alter action/reason
   - `preflight_selected_source_deterministic_output` — output is reproducible
   - `preflight_selected_source_json_serialization` — JSON round-trips, missing fields deserialize to defaults
+- No fetch, no network access, no cache writes, no execution, no protocol version change
+- All existing test behavior preserved
+
+---
+
+## Milestone 6.7
+
+Fetch source policy planning:
+
+- `ResourceDownloadPreflightEntry` extended with:
+  - `source_policy: Option<ResourceFetchSourcePolicyReport>` — policy evaluation for selected source
+- `ResourceFetchSourcePolicyDecision` enum: `Allowed` / `Blocked { reason }` — with `is_allowed()` and `to_label()` helpers
+- `ResourceFetchSourcePolicyReport` struct: `decision`, `scheme`, `allowed_schemes`
+- `DEFAULT_ALLOWED_FETCH_SCHEMES` constant: `["https", "file", "ipfs"]`
+- `evaluate_fetch_source_policy(source)` — pure deterministic function
+- Default policy is permissive: all `DEFAULT_ALLOWED_FETCH_SCHEMES` are allowed
+- Unknown schemes (e.g., `ftp`) are reported as blocked
+- Text output shows: `source policy: allowed <scheme>` or `source policy: blocked:<reason> <scheme>`
+- JSON output includes `source_policy` per entry when a selected source exists; omitted when `None` (backward-compatible)
+- 10 new protocol unit tests (169 protocol tests total, 527 workspace):
+  - `evaluate_source_policy_https_allowed`
+  - `evaluate_source_policy_file_allowed`
+  - `evaluate_source_policy_ipfs_allowed`
+  - `evaluate_source_policy_unknown_scheme_blocked`
+  - `preflight_source_policy_in_text`
+  - `preflight_source_policy_none_when_no_selected_source`
+  - `preflight_source_policy_no_behavior_change`
+  - `preflight_source_policy_deterministic_output`
+  - `preflight_source_policy_json_serialization`
+  - `preflight_source_policy_absent_in_json_when_no_sources`
 - No fetch, no network access, no cache writes, no execution, no protocol version change
 - All existing test behavior preserved
 
