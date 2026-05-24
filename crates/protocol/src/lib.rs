@@ -287,6 +287,10 @@ pub enum ClientMessage {
     Login { name: String, protocol_version: u32 },
     /// Heartbeat ping from client to server. Server should reply with Pong(sequence).
     Ping { sequence: u64 },
+    /// Reply to a server-initiated ServerPing. Client echoes the sequence back.
+    /// This is the authoritative liveness path: the server owns the timer and
+    /// can detect missed replies independently of the client.
+    ServerPong { sequence: u64 },
     Chat { message: String },
     ResourceAvailabilityReport(ResourceAvailabilityReport),
 }
@@ -308,7 +312,13 @@ pub enum ServerMessage {
         protocol_version: u32,
     },
     /// Heartbeat pong from server to client, echoing the sequence from Ping.
+    /// This is the client-diagnostic direction: client initiates, server echoes.
     Pong { sequence: u64 },
+    /// Server-initiated heartbeat ping. Client must reply with ServerPong(sequence).
+    /// This is the authoritative liveness direction: the server owns the timer and
+    /// can measure missed replies without relying on client-reported data.
+    /// Inert stub — no live timer or enforcement in current milestone.
+    ServerPing { sequence: u64 },
     ChatBroadcast {
         from: String,
         message: String,

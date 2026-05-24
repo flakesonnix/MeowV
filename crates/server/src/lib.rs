@@ -634,6 +634,12 @@ async fn handle_client(
                     event_log.count_kind(SessionEventKind::PongSent),
                 );
             }
+            ClientMessage::ServerPong { sequence } => {
+                // Inert: server-initiated ServerPing/ServerPong path not yet active.
+                // When M4.17 wires the server-side heartbeat scheduler, this arm will
+                // record the reply and update the server-side liveness tracking.
+                info!(%client_id, sequence, "received server_pong (no active server ping scheduled)");
+            }
             ClientMessage::Login { .. } => {
                 warn!(%client_id, "ignoring duplicate login packet");
             }
