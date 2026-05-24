@@ -63,6 +63,21 @@ fn missing_required_capability_login(name: &str) -> ClientMessage {
     }
 }
 
+fn warning_only_capability_login(name: &str) -> ClientMessage {
+    ClientMessage::Login {
+        name: name.to_string(),
+        protocol_version: PROTOCOL_VERSION,
+        capabilities: protocol::LoginCapabilities {
+            required: vec![
+                protocol::ProtocolCapability::ResourceAnnouncement,
+                protocol::ProtocolCapability::ResourceAvailabilityReport,
+            ],
+            optional: vec![protocol::ProtocolCapability::JoinGateDryRun],
+            feature_flags: Some(vec!["unknown_feature".to_string()]),
+        },
+    }
+}
+
 #[tokio::test]
 async fn report_only_successful_handshake_reaches_ready_dry_run() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -371,6 +386,58 @@ async fn strict_missing_required_capability_disconnects() -> Result<()> {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let snap = server_state.registry.lock().unwrap().snapshot();
     assert_eq!(snap.connected_sessions, 0);
+
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn strict_warning_only_capability_negotiation_still_allows_handshake() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let server_state = state.clone();
+    let config = make_capability_config(&addr.to_string(), CapabilityPolicy::Strict);
+
+    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+
+    let stream = TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = BufReader::new(reader_half).lines();
+
+    writer_half
+        .write_all(encode_line(&warning_only_capability_login("cap-warn-strict"))?.as_bytes())
+        .await?;
+
+    let _welcome = read_packet(&mut lines).await?;
+    let announcement = read_packet(&mut lines).await?;
+    let announcement = match announcement {
+        ServerMessage::ResourceAnnouncement(a) => a,
+        other => panic!("expected ResourceAnnouncement, got {other:?}"),
+    };
+
+    writer_half
+        .write_all(
+            encode_line(&ClientMessage::ResourceAvailabilityReport(build_available_report(
+                &announcement,
+            )))?
+            .as_bytes(),
+        )
+        .await?;
+
+    loop {
+        match read_packet(&mut lines).await? {
+            ServerMessage::JoinGateDecision(_) => break,
+            ServerMessage::ChatBroadcast { .. } | ServerMessage::EntitySnapshot { .. } => {}
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    let snap = server_state.registry.lock().unwrap().snapshot();
+    assert_eq!(snap.connected_sessions, 1);
+    assert_eq!(snap.ready_dry_run_sessions, 1);
+    let report = snap.sessions[0].capability_negotiation.clone().unwrap();
+    assert_eq!(report.decision.to_text(), "accepted_with_warnings");
 
     server_task.abort();
     Ok(())
