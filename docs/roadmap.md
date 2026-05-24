@@ -59,6 +59,25 @@
 | 4.11 | Heartbeat timeout policy planner — `HeartbeatPolicy`, `HeartbeatDecision`, `HeartbeatPlannerInput`; deterministic evaluator; surfaced in `SessionDiagnostics`; report-only by default |
 | 4.12 | Heartbeat policy report in admin/status — `heartbeat=<label>` per-session in `sessions`/`diagnostics` output; `to_short_label()` on `HeartbeatDecision`; tests; docs |
 | 4.13 | Heartbeat policy config plumbing — `[heartbeat]` TOML section; `HeartbeatSection` with `Default → ReportOnly`; policy threaded through registry snapshot, diagnostics, admin output, and `ServerRuntimeStatus`; no enforcement |
+| 4.14 | Strict heartbeat enforcement wiring — `ClientHeartbeatPolicy` enum; client-side `heartbeat_loop` enforces disconnect at threshold under `Strict`; `--heartbeat-policy` CLI flag; `enforcement_disconnect` field on `HeartbeatMetrics`; 7 new tests |
+
+---
+
+## Milestone 4.14
+
+Strict heartbeat enforcement wiring:
+
+- `ClientHeartbeatPolicy` enum (`ReportOnly`, `Strict`) added to `client/src/lib.rs`
+- `CLIENT_HEARTBEAT_DISCONNECT_THRESHOLD = 3` — matches server-side `MISSED_HEARTBEAT_DISCONNECT_THRESHOLD`
+- `heartbeat_loop` gains `policy: ClientHeartbeatPolicy` parameter; breaks with `enforcement_disconnect=true` when `Strict` + threshold reached
+- `HeartbeatMetrics.enforcement_disconnect: bool` — set when enforcement triggered the loop exit
+- `to_text()` appends `heartbeat_enforcement_disconnect: true` when set
+- `--heartbeat-policy strict|report_only` CLI flag for the client (default: `report_only`)
+- Client logs enforcement disconnect message when triggered
+- 4 client enforcement tests (`heartbeat_enforcement.rs`): ReportOnly no-disconnect, Strict disconnects at threshold, Strict stays connected when healthy, metrics correct
+- 3 server heartbeat enforcement tests (`heartbeat_enforcement.rs`): registry cleanup after disconnect, ReportOnly session stays connected, Strict session stays connected when healthy
+- Server enforcement (heartbeat): no change — server view always has `timeout_or_error=0`; all per-session labels remain observational. Enforcement is a client-side decision.
+- No protocol wire changes; no Login capability changes
 
 ---
 

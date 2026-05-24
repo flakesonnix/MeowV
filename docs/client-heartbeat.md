@@ -5,6 +5,7 @@ Flags:
 - --heartbeat-enabled
 - --heartbeat-interval-ms <n>   # interval between pings in milliseconds (default 5000)
 - --heartbeat-timeout-ms <n>    # timeout waiting for a Pong in milliseconds (default 2000)
+- --heartbeat-policy <value>    # "report_only" (default) or "strict"
 
 Behavior:
 
@@ -12,9 +13,10 @@ Behavior:
   loop that sends ClientMessage::Ping { sequence } and waits for ServerMessage::Pong { sequence }.
 - Sequence starts at 1 and increments on each ping.
 - On Pong: prints/logs "Heartbeat <n>: Pong received".
-- On timeout/error: prints/logs "Heartbeat <n>: failed: <error>" and continues.
-- No disconnect or enforcement happens on missed pongs — loop is report-only.
-- On clean Ctrl-C shutdown, client prints deterministic heartbeat summary with sent/pong/timeout counts and last ping/pong sequence numbers.
+- On timeout/error: prints/logs "Heartbeat <n>: failed: <error>".
+- Under `ReportOnly` (default): continues after every timeout — no enforcement disconnect.
+- Under `Strict`: disconnects when `timeout_or_error_count >= CLIENT_HEARTBEAT_DISCONNECT_THRESHOLD (3)`.
+- On clean Ctrl-C shutdown (or after enforcement disconnect), client prints deterministic heartbeat summary with sent/pong/timeout counts and last ping/pong sequence numbers.
 
 Observability:
 
@@ -47,3 +49,14 @@ Config Plumbing (M4.13):
 - `ServerRuntimeStatus::to_text()` includes `heartbeat_policy: <value>` for operator inspection.
 - Startup lifecycle summary includes `heartbeat_policy:` line.
 - No disconnect enforcement occurs regardless of policy setting in this milestone.
+
+Client Enforcement (M4.14):
+
+- `ClientHeartbeatPolicy` enum (`ReportOnly`, `Strict`) in `client/src/lib.rs`.
+- `CLIENT_HEARTBEAT_DISCONNECT_THRESHOLD = 3` — matches server-side `MISSED_HEARTBEAT_DISCONNECT_THRESHOLD`.
+- `heartbeat_loop` accepts `policy: ClientHeartbeatPolicy`; breaks with `enforcement_disconnect=true` at threshold under `Strict`.
+- `HeartbeatMetrics.enforcement_disconnect: bool` — set when enforcement triggered exit.
+- `to_text()` appends `heartbeat_enforcement_disconnect: true` when set.
+- `--heartbeat-policy strict` enables enforcement; default is `report_only`.
+- Server-side labels (`heartbeat=<label>`) remain observational — server view always has `timeout_or_error=0` and cannot trigger `WouldDisconnectMissedHeartbeat` without client-reported data.
+- No protocol wire changes; registry cleanup on disconnect works via `SessionGuard` on all paths.
