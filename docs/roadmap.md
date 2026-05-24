@@ -70,6 +70,7 @@
 | 4.22 | Milestone stack audit / release notes — concise M4.0-M4.21 summary doc covering enforcement, signature, client heartbeat, server-authoritative heartbeat, admin visibility, ReportOnly vs Strict behavior, and Disconnect-vs-EOF guarantees; roadmap updated; no runtime changes |
 | 5.0 | Capability model v2 design — define Login capability payload, required vs optional capability policy, unknown capability behavior, protocol version bump strategy, explicit negotiation result, and observability plan; design doc only, no wire changes |
 | 5.1 | Login capability payload + protocol version bump — `Login` carries required/optional capabilities and optional feature flags; protocol bumped to v2; client sends payload; server reads/stores payload; legacy missing-payload login rejected |
+| 5.2 | Capability negotiation report / dry-run gate — deterministic accepted / accepted_with_warnings / would_reject report from `LoginCapabilities` and server policy; surfaced in diagnostics/admin/status; no disconnect enforcement |
 
 ---
 
@@ -120,6 +121,19 @@ Login capability payload + protocol version bump:
 - Missing capability payload on protocol v2 login is rejected as `InvalidHandshake`
 - Example resource manifests bumped to protocol v2 so handshake announcement fixtures still build under exact-version tests
 - No required-capability enforcement yet; exact protocol match remains active gate
+
+---
+
+## Milestone 5.2
+
+Capability negotiation report / dry-run gate:
+
+- New deterministic protocol-layer negotiation report from advertised `LoginCapabilities` and server capability policy
+- Result labels: `accepted`, `accepted_with_warnings`, `would_reject`
+- Reports required-supported, required-missing, optional-supported, optional-missing, unsupported client optional capabilities, and feature flags
+- Missing required capabilities are recorded as would-reject violations only; live handshake still proceeds in this milestone
+- Report is surfaced read-only through session diagnostics, live session registry/admin `sessions`, and server `status`
+- No protocol wire changes, no disconnects, no strict capability enforcement yet
 
 ---
 

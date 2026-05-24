@@ -227,6 +227,7 @@ claimed in first v2 rollout.
 ### M5.2
 - add pure capability negotiation result evaluator
 - no runtime enforcement yet
+- surface accepted / accepted_with_warnings / would_reject as dry-run observability only
 
 ### M5.3
 - wire capability result into server handshake diagnostics / logs
