@@ -73,6 +73,7 @@
 | 5.2 | Capability negotiation report / dry-run gate — deterministic accepted / accepted_with_warnings / would_reject report from `LoginCapabilities` and server policy; surfaced in diagnostics/admin/status; no disconnect enforcement |
 | 5.3 | Strict required capability enforcement — explicit capability policy with `report_only` default and `strict` reject-on-would_reject behavior; registry/diagnostics updated; no wire change |
 | 5.4 | Capability enforcement UX / invariants — document operator-visible ReportOnly vs Strict guarantees, clarify capability-vs-protocol rejection boundaries, and add invariant coverage without behavior change |
+| 6.0 | Resource download preflight / safe fetch planning — pure deterministic report-only planner for fetch/replace/block actions; no network, no writes, no execution |
 
 ---
 
@@ -166,6 +167,18 @@ Capability enforcement UX / invariants:
   - missing capability payload remains `InvalidHandshake`, not ordinary capability negotiation
 - Adds invariant coverage for `strict` + warning-only capability negotiation remaining connected
 - No runtime behavior change, no wire change, no version bump
+
+---
+
+## Milestone 6.0
+
+Resource download preflight / safe fetch planning:
+
+- Adds pure deterministic preflight planner from resource announcement, local availability, signature result/policy, and resource policy result
+- Action set: `AlreadyAvailable`, `FetchMissing`, `ReplaceInvalid`, `BlockedBySignaturePolicy`, `BlockedByResourcePolicy`, `UnsupportedResource`, `WouldVerifyAfterFetch`
+- Report-only only: no network access, no cache writes, no execution, no mutation
+- Deterministic `to_text()` output and sorted mixed-resource entries
+- New doc: `docs/resource-download-preflight.md`
 
 ---
 
