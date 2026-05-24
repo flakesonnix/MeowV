@@ -222,6 +222,7 @@ claimed in first v2 rollout.
 - add `Login` v2 DTO fields
 - bump protocol version
 - add decode/encode tests
+- bump example resource manifests to protocol v2 so exact-version handshake fixtures still announce resources
 
 ### M5.2
 - add pure capability negotiation result evaluator

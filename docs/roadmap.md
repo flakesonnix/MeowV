@@ -69,6 +69,7 @@
 | 4.21 | Heartbeat enforcement polish / invariants — code comments documenting best-effort Disconnect vs guaranteed EOF (writer_half drop); `handle_enforcement` doc note for direct-write path; `heartbeat-authority-design.md` implementation status; 1 deterministic integration test (`strict_enforcement_independent_of_client_ping_activity`) |
 | 4.22 | Milestone stack audit / release notes — concise M4.0-M4.21 summary doc covering enforcement, signature, client heartbeat, server-authoritative heartbeat, admin visibility, ReportOnly vs Strict behavior, and Disconnect-vs-EOF guarantees; roadmap updated; no runtime changes |
 | 5.0 | Capability model v2 design — define Login capability payload, required vs optional capability policy, unknown capability behavior, protocol version bump strategy, explicit negotiation result, and observability plan; design doc only, no wire changes |
+| 5.1 | Login capability payload + protocol version bump — `Login` carries required/optional capabilities and optional feature flags; protocol bumped to v2; client sends payload; server reads/stores payload; legacy missing-payload login rejected |
 
 ---
 
@@ -102,6 +103,23 @@ Capability model v2 design:
 - Defines explicit negotiation result model: accepted / accepted_with_warnings / rejected
 - Defines diagnostics, admin, and structured-log observability targets
 - No protocol wire change, no runtime behavior change, no enforcement change
+
+---
+
+## Milestone 5.1
+
+Login capability payload + protocol version bump:
+
+- `PROTOCOL_VERSION` bumped from `1` to `2`
+- `ClientMessage::Login` now carries `capabilities: LoginCapabilities`
+- `LoginCapabilities` separates `required`, `optional`, and optional string `feature_flags`
+- Login decode normalizes capability lists and feature flags via sort + dedup for deterministic behavior
+- Unknown typed capability strings are rejected at decode; unknown feature flags are tolerated
+- Client login creation now sends current required/optional capability sets on live connect and `--ping-once`
+- Server login handling reads/stores advertised login capabilities and includes counts in observability
+- Missing capability payload on protocol v2 login is rejected as `InvalidHandshake`
+- Example resource manifests bumped to protocol v2 so handshake announcement fixtures still build under exact-version tests
+- No required-capability enforcement yet; exact protocol match remains active gate
 
 ---
 
