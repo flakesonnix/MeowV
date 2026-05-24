@@ -81,7 +81,7 @@ async fn handshake_then_ping_pong() -> Result<()> {
             ServerMessage::Disconnect { .. } => {
                 panic!("unexpected disconnect while waiting for pong")
             }
-            other => { /* skip any other messages */ }
+            _other => { /* skip any other messages */ }
         }
     }
 

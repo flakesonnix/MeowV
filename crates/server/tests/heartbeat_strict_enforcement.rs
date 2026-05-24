@@ -142,7 +142,7 @@ async fn report_only_never_disconnects_for_missed_server_pong() -> Result<()> {
 
     let (_w, mut lines) = connect_and_complete_handshake(addr).await?;
 
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
     // Wait well beyond the point where threshold pings would fire.
     sleep(Duration::from_millis((threshold + 3) * 20 + 100)).await;
 
@@ -213,7 +213,7 @@ async fn strict_missed_server_pong_threshold_disconnects_session() -> Result<()>
     let (_w, mut lines) = connect_and_complete_handshake(addr).await?;
 
     // Wait for server to detect threshold missed pongs and close the connection.
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
     let wait_budget_ms = (threshold + 3) * 15 + 300;
 
     let stream_closed = timeout(Duration::from_millis(wait_budget_ms), async {
@@ -252,7 +252,7 @@ async fn strict_registry_cleaned_up_after_heartbeat_disconnect() -> Result<()> {
     let (_w, _lines) = connect_and_complete_handshake(addr).await?;
 
     // Wait for enforcement disconnect + handler cleanup (SessionGuard drop).
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
     sleep(Duration::from_millis((threshold + 3) * 15 + 300)).await;
 
     let snap = server_state.registry.lock().unwrap().snapshot();
@@ -278,7 +278,7 @@ async fn strict_partial_pong_history_still_disconnects_at_threshold() -> Result<
 
     let (mut w, mut lines) = connect_and_complete_handshake(addr).await?;
 
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
 
     // Reply to the first (threshold - 1) pings so pong history is non-zero.
     for _ in 0..(threshold - 1) {
@@ -332,7 +332,7 @@ async fn strict_enforcement_independent_of_client_ping_activity() -> Result<()> 
 
     let (mut w, mut lines) = connect_and_complete_handshake(addr).await?;
 
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
     let wait_budget_ms = (threshold + 3) * 15 + 300;
 
     let stream_closed = timeout(Duration::from_millis(wait_budget_ms), async {

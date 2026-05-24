@@ -1,5 +1,5 @@
 use crate::enforcement::{
-    SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement,
+    SessionEnforcementPolicy, evaluate_enforcement,
 };
 use crate::event_log::{SessionEvent, SessionEventKind, SessionEventLog};
 use crate::heartbeat_planner::{

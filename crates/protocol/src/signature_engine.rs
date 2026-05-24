@@ -170,7 +170,7 @@ impl VerificationReport {
         if self.entries.is_empty() {
             return "signature verification report: (empty, no resources)\n".to_string();
         }
-        let mut lines = format!("signature verification report:\n");
+        let mut lines = "signature verification report:\n".to_string();
         for entry in &self.entries {
             let label = match &entry.outcome {
                 VerificationOutcome::Valid => "valid".to_string(),

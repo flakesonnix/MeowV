@@ -270,7 +270,7 @@ pub async fn heartbeat_loop(
                 metrics.last_ping_sequence = Some(sequence);
                 let mut wguard = writer.lock().await;
                 let mut lguard = lines.lock().await;
-                let res = crate::heartbeat::send_ping_and_wait_with_timeout(&mut *wguard, &mut *lguard, sequence, timeout).await;
+                let res = crate::heartbeat::send_ping_and_wait_with_timeout(&mut wguard, &mut lguard, sequence, timeout).await;
                 match res {
                     Ok(()) => {
                         metrics.pong_count = metrics.pong_count.saturating_add(1);

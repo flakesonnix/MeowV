@@ -2117,11 +2117,7 @@ mod tests {
                     platform: GamePlatform::Linux,
                 },
             );
-            if edition == GameEdition::Unknown {
-                assert_eq!(report.status, CompatibilityStatus::Compatible);
-            } else {
-                assert_eq!(report.status, CompatibilityStatus::Compatible);
-            }
+            assert_eq!(report.status, CompatibilityStatus::Compatible);
         }
     }
 

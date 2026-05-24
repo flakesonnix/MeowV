@@ -398,7 +398,7 @@ async fn handle_client(
                         info!(%client_id, state = ?session.state(), "session: hello received");
                     }
 
-                    if let Err(_) = session.on_version_checked(protocol_version) {
+                    if session.on_version_checked(protocol_version).is_err() {
                         event_log.record(
                         SessionEventKind::Failed,
                         SessionState::Failed,
@@ -680,23 +680,25 @@ async fn handle_client(
                 maybe_message = client_rx.recv() => {
                     match maybe_message {
                         Some(message) => {
-                            if let Err(err) = send_direct(&mut writer_half, &message).await {
-                                return Err(err);
+                            if let Err(e) = send_direct(&mut writer_half, &message).await {
+                                error!(error = %e, "writer: send direct failed");
+                                return;
                             }
                         }
-                        None => return Ok(()),
+                        None => return,
                     }
                 }
                 result = rx.recv() => {
                     match result {
                         Ok(message) => {
-                            if let Err(err) = send_direct(&mut writer_half, &message).await {
-                                return Err(err);
+                            if let Err(e) = send_direct(&mut writer_half, &message).await {
+                                error!(error = %e, "writer: broadcast send failed");
+                                return;
                             }
                         }
                         Err(err) => {
                             error!(error = %err, "broadcast receive failed");
-                            return Ok(());
+                            return;
                         }
                     }
                 }

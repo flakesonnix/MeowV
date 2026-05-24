@@ -1234,7 +1234,7 @@ impl SignatureVerificationPlan {
         if self.entries.is_empty() {
             return "signature verification plan: (empty, no resources)\n".to_string();
         }
-        let mut lines = format!("signature verification plan:\n");
+        let mut lines = "signature verification plan:\n".to_string();
         for entry in &self.entries {
             lines.push_str(&format!(
                 "  [{}] {} — {}\n",

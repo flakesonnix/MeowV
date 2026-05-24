@@ -5,7 +5,7 @@ use crate::heartbeat_planner::{
     evaluate_server_heartbeat,
 };
 use crate::session::SessionState;
-use protocol::{CapabilityNegotiationDecision, CapabilityNegotiationReport, LoginCapabilities};
+use protocol::{CapabilityNegotiationReport, LoginCapabilities};
 
 /// Opaque session identifier. Monotonic u64; never based on IP or personal data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -121,6 +121,12 @@ pub struct SessionRegistry {
     next_id: u64,
     entries: BTreeMap<SessionId, SessionRegistryEntry>,
     heartbeat_policy: HeartbeatPolicy,
+}
+
+impl Default for SessionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionRegistry {

@@ -190,10 +190,8 @@ async fn strict_heartbeat_policy_session_stays_connected_when_healthy() -> Resul
         let got_pong = timeout(Duration::from_millis(500), async {
             loop {
                 if let Ok(Some(line)) = lines.next_line().await {
-                    if let Ok(ServerMessage::Pong { sequence: s }) = decode_server_line(&line) {
-                        if s == seq {
-                            return true;
-                        }
+                    if let Ok(ServerMessage::Pong { sequence: s }) = decode_server_line(&line) && s == seq {
+                        return true;
                     }
                 } else {
                     return false;

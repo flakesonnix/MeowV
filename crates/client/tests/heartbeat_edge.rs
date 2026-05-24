@@ -42,13 +42,10 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
 
         // read pings and echo pongs, record sequences
         while let Ok(Some(line)) = lines.next_line().await {
-            match decode_client_line(&line).expect("decode client") {
-                ClientMessage::Ping { sequence } => {
-                    seen_srv.lock().await.push(sequence);
-                    let pong = encode_line(&ServerMessage::Pong { sequence }).unwrap();
-                    let _ = w.write_all(pong.as_bytes()).await;
-                }
-                _ => {}
+            if let ClientMessage::Ping { sequence } = decode_client_line(&line).expect("decode client") {
+                seen_srv.lock().await.push(sequence);
+                let pong = encode_line(&ServerMessage::Pong { sequence }).unwrap();
+                let _ = w.write_all(pong.as_bytes()).await;
             }
         }
     });
@@ -142,12 +139,9 @@ async fn heartbeat_loop_timeout_continues_without_disconnect() -> Result<()> {
 
         // read pings and record sequences, but don't reply
         while let Ok(Some(line)) = lines.next_line().await {
-            match decode_client_line(&line).expect("decode client") {
-                ClientMessage::Ping { sequence } => {
-                    seen_srv.lock().await.push(sequence);
-                    // do not send Pong
-                }
-                _ => {}
+            if let ClientMessage::Ping { sequence } = decode_client_line(&line).expect("decode client") {
+                seen_srv.lock().await.push(sequence);
+                // do not send Pong
             }
         }
     });
@@ -155,7 +149,7 @@ async fn heartbeat_loop_timeout_continues_without_disconnect() -> Result<()> {
     // client side
     let stream = tokio::net::TcpStream::connect(addr).await?;
     let (reader_half, mut writer_half) = stream.into_split();
-    let mut lines = tokio::io::BufReader::new(reader_half).lines();
+    let lines = tokio::io::BufReader::new(reader_half).lines();
 
     // send login
     writer_half

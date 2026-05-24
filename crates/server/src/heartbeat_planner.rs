@@ -450,7 +450,6 @@ mod tests {
 
     #[test]
     fn srv_at_threshold_with_some_pong_under_strict_returns_would_disconnect() {
-        let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
         // missed = 5 - 2 = 3 >= threshold
         assert_eq!(
             evaluate_server_heartbeat(&srv_input(5, 2), &HeartbeatPolicy::Strict),

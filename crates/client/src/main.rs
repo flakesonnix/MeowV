@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use base64::Engine as _;
 use game_edition::{GameEdition, GamePlatform};
 use protocol::signature_engine::{
-    KeyConfigError, SignaturePolicy, TrustedPublicKey, evaluate_signature_policy,
+    SignaturePolicy, TrustedPublicKey, evaluate_signature_policy,
     execute_verification_plan, validate_trusted_key_config,
 };
 use protocol::{
@@ -453,8 +453,8 @@ fn print_server_list(path: &str) -> Result<()> {
     let entries = filter_current_protocol(&entries);
 
     println!(
-        "{:<24} {:<21} {:<9} {:<8} {:<10} {}",
-        "NAME", "ADDRESS", "PLAYERS", "PROTO", "EDITION", "TAGS"
+        "{:<24} {:<21} {:<9} {:<8} {:<10} TAGS",
+        "NAME", "ADDRESS", "PLAYERS", "PROTO", "EDITION"
     );
 
     for entry in entries {
@@ -984,6 +984,7 @@ fn print_verify_announcement_signature(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn get_resource_download_preflight_plan_text(
     path: &str,
     args: &[String],

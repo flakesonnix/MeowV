@@ -13,6 +13,7 @@ use protocol::{ClientMessage, ServerMessage, decode_server_line, encode_line};
 /// Pong(sequence) is received or times out. It tolerates unrelated interleaved
 /// server messages by reading and ignoring them until the matching Pong arrives.
 /// Timeout defaults to 2 seconds.
+#[allow(dead_code)]
 pub async fn send_ping_and_wait(
     writer: &mut OwnedWriteHalf,
     reader: &mut Lines<BufReader<OwnedReadHalf>>,
@@ -22,6 +23,7 @@ pub async fn send_ping_and_wait(
 }
 
 /// Variant that allows a custom timeout duration. Useful for tests.
+#[allow(dead_code)]
 pub async fn send_ping_and_wait_with_timeout(
     writer: &mut OwnedWriteHalf,
     reader: &mut Lines<BufReader<OwnedReadHalf>>,

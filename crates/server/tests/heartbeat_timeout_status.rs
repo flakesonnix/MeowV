@@ -240,7 +240,7 @@ async fn srv_heartbeat_strict_enforcement_removes_session_at_threshold() -> Resu
     let (_w, _lines) = connect_and_complete_handshake(addr).await?;
 
     // Wait until >= threshold pings would fire plus handler cleanup time.
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
     let wait_ms = (threshold + 3) * 20 + 150;
     sleep(Duration::from_millis(wait_ms)).await;
 
@@ -268,7 +268,7 @@ async fn srv_heartbeat_report_only_never_shows_would_disconnect() -> Result<()> 
     let (_w, mut lines) = connect_and_complete_handshake(addr).await?;
 
     // Let >= threshold pings fire
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
     sleep(Duration::from_millis((threshold + 2) * 20 + 50)).await;
 
     while let Ok(Ok(Some(_))) = timeout(Duration::from_millis(5), lines.next_line()).await {}
