@@ -988,6 +988,9 @@ async fn handle_client(
                             };
                             info!(%client_id, "session diagnostics (server heartbeat enforcement):\n{text}");
                         }
+                        // Best-effort: Disconnect is queued via client_tx, but writer_task.abort()
+                        // (after the loop) may preempt the writer before it flushes the frame.
+                        // TCP close via writer_half drop on abort is the authoritative signal.
                         let _ = client_tx.send(ServerMessage::Disconnect {
                             reason: DisconnectReason::InvalidHandshake,
                             message: format!(
@@ -1009,6 +1012,8 @@ async fn handle_client(
         message: format!("{name} left"),
     });
 
+    // Aborting writer_task drops writer_half, closing the TCP write half and delivering
+    // EOF to the client. This is the authoritative connection close for all loop exit paths.
     writer_task.abort();
     state
         .registry
@@ -1037,6 +1042,9 @@ async fn handle_client(
 /// - Returns `Ok(true)` to signal the caller to stop processing
 ///
 /// Returns `Ok(false)` if no enforcement action is taken.
+///
+/// Called only during the handshake phase, before writer_task is spawned.
+/// `writer` is the raw TCP write half so Disconnect delivery is direct and guaranteed.
 async fn handle_enforcement(
     session: &SessionStateMachine,
     event_log: &mut SessionEventLog,
