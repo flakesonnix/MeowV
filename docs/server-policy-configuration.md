@@ -39,14 +39,16 @@ Controls how the heartbeat planner decision is evaluated per session.
 
 | Mode | Behavior |
 |------|----------|
-| `"report_only"` | Heartbeat decisions are evaluated and surfaced in diagnostics/admin output. No disconnect occurs regardless of miss count. |
-| `"strict"` | Heartbeat decisions are evaluated under strict thresholds. `WouldDisconnectMissedHeartbeat` is logged when `timeout_or_error >= 3`. No actual disconnect occurs in the current milestone — this is planning only. |
+| `"report_only"` | Heartbeat labels (`heartbeat=<label>`, `srv_heartbeat=<label>`) computed and surfaced in diagnostics/admin output. No disconnect occurs regardless of miss count. |
+| `"strict"` | Server-initiated direction: when missed server pongs ≥ `MISSED_SERVER_PONG_DISCONNECT_THRESHOLD (3)`, the session is failed and the TCP connection is closed. Client-initiated direction labels are observational only (server has no `timeout_or_error` data). |
 
 The policy is set at startup via `set_heartbeat_policy()` on the session registry.
-All per-session `heartbeat=<label>` values in admin `sessions` and `diagnostics`
-output reflect the configured policy.
+All per-session `heartbeat=<label>` and `srv_heartbeat=<label>` values in admin
+`sessions` and `diagnostics` output reflect the configured policy.
 
-See `docs/client-heartbeat.md` for planner decisions and label descriptions.
+See `docs/client-heartbeat.md` for planner decisions, label descriptions, and
+enforcement invariants. See `docs/m4-enforcement-heartbeat-summary.md` for the
+full M4 stack summary.
 
 ## Example Config
 
