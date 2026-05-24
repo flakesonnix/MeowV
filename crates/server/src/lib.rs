@@ -1270,6 +1270,7 @@ fn build_example_resource_announcement(resource_dir: &str) -> Option<ResourceAnn
             relative_path: file.relative_path.to_string_lossy().into_owned(),
             size_bytes: file.size_bytes,
             sha256: file.sha256,
+            sources: None,
         })
         .collect();
 
