@@ -13,6 +13,8 @@ pub struct SessionDiagnostics {
     pub last_event_message: Option<String>,
     pub ping_received_count: usize,
     pub pong_sent_count: usize,
+    pub server_ping_sent_count: usize,
+    pub server_pong_received_count: usize,
     pub ready_dry_run: bool,
     pub failure_reason: Option<String>,
     pub enforcement_policy: Option<String>,
@@ -32,6 +34,8 @@ impl SessionDiagnostics {
             last_event_message: log.last().map(|e| e.message.clone()),
             ping_received_count: log.count_kind(SessionEventKind::PingReceived),
             pong_sent_count: log.count_kind(SessionEventKind::PongSent),
+            server_ping_sent_count: log.count_kind(SessionEventKind::ServerPingSent),
+            server_pong_received_count: log.count_kind(SessionEventKind::ServerPongReceived),
             events: log.events().to_vec(),
             current_state,
             enforcement_policy: None,
@@ -89,6 +93,8 @@ impl SessionDiagnostics {
         out.push_str(&format!("event_count: {}\n", self.event_count));
         out.push_str(&format!("ping_received_count: {}\n", self.ping_received_count));
         out.push_str(&format!("pong_sent_count: {}\n", self.pong_sent_count));
+        out.push_str(&format!("server_ping_sent_count: {}\n", self.server_ping_sent_count));
+        out.push_str(&format!("server_pong_received_count: {}\n", self.server_pong_received_count));
         if let Some(hb) = &self.heartbeat_decision {
             out.push_str(&format!("{hb}\n"));
         }
@@ -126,7 +132,7 @@ impl SessionDiagnostics {
         format!(
             "{{\"current_state\":\"{:?}\",\"ready_dry_run\":{},\"failure_reason\":{},\
 \"state_history\":[{}],\"event_count\":{},\"events\":[{}],\"last_event_message\":{},\
-\"ping_received_count\":{},\"pong_sent_count\":{},\"enforcement_policy\":{},\"enforcement_decision\":{},\
+\"ping_received_count\":{},\"pong_sent_count\":{},\"server_ping_sent_count\":{},\"server_pong_received_count\":{},\"enforcement_policy\":{},\"enforcement_decision\":{},\
 \"heartbeat_decision\":{}}}",
             self.current_state,
             self.ready_dry_run,
@@ -137,6 +143,8 @@ impl SessionDiagnostics {
             optional_json_string(self.last_event_message.as_deref()),
             self.ping_received_count,
             self.pong_sent_count,
+            self.server_ping_sent_count,
+            self.server_pong_received_count,
             optional_json_string(self.enforcement_policy.as_deref()),
             optional_json_string(self.enforcement_decision.as_deref()),
             optional_json_string(self.heartbeat_decision.as_deref()),

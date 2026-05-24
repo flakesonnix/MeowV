@@ -19,7 +19,7 @@ fn make_config(addr: &str, hb_policy: HeartbeatPolicy) -> ServerConfig {
             motd: "heartbeat enforcement test".to_string(),
             ..ServerSection::default()
         },
-        heartbeat: HeartbeatSection { policy: hb_policy },
+        heartbeat: HeartbeatSection { policy: hb_policy, server_ping_interval_ms: 0 },
         ..ServerConfig::default()
     }
 }

@@ -611,8 +611,26 @@ async fn handle_client(
         }
     });
 
-    while let Some(line) = lines.next_line().await? {
-        match decode_client_line(&line)? {
+    // Server-initiated heartbeat scheduler.
+    let srv_ping_enabled = config.heartbeat.server_ping_interval_ms > 0;
+    let srv_ping_dur =
+        Duration::from_millis(config.heartbeat.server_ping_interval_ms.max(1));
+    // interval_at schedules the first tick at now+dur, avoiding the immediate t=0 fire.
+    let mut srv_ping_interval = time::interval_at(
+        time::Instant::now() + srv_ping_dur,
+        srv_ping_dur,
+    );
+    srv_ping_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+    let mut srv_ping_sequence: u64 = 1;
+
+    loop {
+        tokio::select! {
+            maybe_line = lines.next_line() => {
+                let line = match maybe_line? {
+                    Some(l) => l,
+                    None => break,
+                };
+                match decode_client_line(&line)? {
             ClientMessage::Ping { sequence } => {
                 // Heartbeat ping: reply with Pong echoing the sequence.
                 // Record minimal event for observability but do not change session state.
@@ -635,10 +653,17 @@ async fn handle_client(
                 );
             }
             ClientMessage::ServerPong { sequence } => {
-                // Inert: server-initiated ServerPing/ServerPong path not yet active.
-                // When M4.17 wires the server-side heartbeat scheduler, this arm will
-                // record the reply and update the server-side liveness tracking.
-                info!(%client_id, sequence, "received server_pong (no active server ping scheduled)");
+                event_log.record(
+                    SessionEventKind::ServerPongReceived,
+                    session.state().clone(),
+                    format!("server heartbeat: received ServerPong {}", sequence),
+                );
+                state.registry.lock().unwrap().update_server_heartbeat_counts(
+                    &session_id,
+                    event_log.count_kind(SessionEventKind::ServerPingSent),
+                    event_log.count_kind(SessionEventKind::ServerPongReceived),
+                );
+                info!(%client_id, sequence, "received server_pong");
             }
             ClientMessage::Login { .. } => {
                 warn!(%client_id, "ignoring duplicate login packet");
@@ -902,8 +927,25 @@ async fn handle_client(
                     warn!(%client_id, "resource availability report received before announcement was stored");
                 }
             }
-        }
-    }
+                } // close match decode_client_line
+            } // close maybe_line arm
+            _ = srv_ping_interval.tick(), if srv_ping_enabled => {
+                let _ = client_tx.send(ServerMessage::ServerPing { sequence: srv_ping_sequence });
+                event_log.record(
+                    SessionEventKind::ServerPingSent,
+                    session.state().clone(),
+                    format!("server heartbeat: sent ServerPing {}", srv_ping_sequence),
+                );
+                state.registry.lock().unwrap().update_server_heartbeat_counts(
+                    &session_id,
+                    event_log.count_kind(SessionEventKind::ServerPingSent),
+                    event_log.count_kind(SessionEventKind::ServerPongReceived),
+                );
+                info!(%client_id, sequence = srv_ping_sequence, "sent server_ping");
+                srv_ping_sequence = srv_ping_sequence.saturating_add(1);
+            }
+        } // close select!
+    } // close loop
 
     state.clients.write().await.remove(&client_id);
     let _ = tx.send(ServerMessage::ChatBroadcast {

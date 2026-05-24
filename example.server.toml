@@ -78,3 +78,7 @@ policy = "report_only"
 # decisions but never disconnects. "strict" evaluates whether repeated missed
 # heartbeats would trigger a disconnect (no enforcement in current milestone).
 policy = "report_only"
+
+# Interval in milliseconds between server-initiated ServerPing messages.
+# Set to 0 to disable server-initiated heartbeats. Default: 5000 (5 seconds).
+server_ping_interval_ms = 5000

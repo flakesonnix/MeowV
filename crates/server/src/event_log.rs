@@ -11,6 +11,10 @@ pub enum SessionEventKind {
     PingReceived,
     /// Heartbeat pong was sent to the client
     PongSent,
+    /// Server-initiated heartbeat ping sent to the client
+    ServerPingSent,
+    /// Client replied to a server-initiated heartbeat ping
+    ServerPongReceived,
     ResourceAnnouncementSent,
     AvailabilityReportReceived,
     ResourcePolicyEvaluated,

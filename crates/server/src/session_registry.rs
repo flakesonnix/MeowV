@@ -30,6 +30,8 @@ pub struct SessionRegistryEntry {
     pub protocol_version: Option<u32>,
     pub ping_received_count: usize,
     pub pong_sent_count: usize,
+    pub server_ping_sent_count: usize,
+    pub server_pong_received_count: usize,
 }
 
 /// Point-in-time aggregate snapshot of all registered sessions.
@@ -68,9 +70,11 @@ impl SessionRegistrySnapshot {
             let hb_label = evaluate_heartbeat(&hb_input, &self.heartbeat_policy)
                 .to_short_label();
             lines.push(format!(
-                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  ping_rx={}  pong_tx={}  heartbeat={}",
+                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  ping_rx={}  pong_tx={}  srv_ping_tx={}  srv_pong_rx={}  heartbeat={}",
                 entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed, proto,
-                entry.ping_received_count, entry.pong_sent_count, hb_label,
+                entry.ping_received_count, entry.pong_sent_count,
+                entry.server_ping_sent_count, entry.server_pong_received_count,
+                hb_label,
             ));
         }
         lines.join("\n")
@@ -116,6 +120,8 @@ impl SessionRegistry {
                 protocol_version: None,
                 ping_received_count: 0,
                 pong_sent_count: 0,
+                server_ping_sent_count: 0,
+                server_pong_received_count: 0,
             },
         );
         id
@@ -154,6 +160,19 @@ impl SessionRegistry {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.ping_received_count = ping_received;
             entry.pong_sent_count = pong_sent;
+        }
+    }
+
+    /// Update server-initiated heartbeat counts derived from the session event log.
+    pub fn update_server_heartbeat_counts(
+        &mut self,
+        id: &SessionId,
+        ping_sent: usize,
+        pong_received: usize,
+    ) {
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.server_ping_sent_count = ping_sent;
+            entry.server_pong_received_count = pong_received;
         }
     }
 

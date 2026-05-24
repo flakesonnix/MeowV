@@ -258,12 +258,17 @@ impl Default for SignatureSection {
 #[serde(default)]
 pub struct HeartbeatSection {
     pub policy: HeartbeatPolicy,
+    /// Interval in milliseconds between server-initiated ServerPing messages.
+    /// Set to 0 to disable the server-initiated heartbeat scheduler entirely.
+    /// Default: 5000 (5 seconds).
+    pub server_ping_interval_ms: u64,
 }
 
 impl Default for HeartbeatSection {
     fn default() -> Self {
         Self {
             policy: HeartbeatPolicy::ReportOnly,
+            server_ping_interval_ms: 5000,
         }
     }
 }
