@@ -83,6 +83,7 @@
 | 6.11 | Verified cache commit — atomic rename, replace-invalid, `--allow-cache-commit` opt-in |
 | 6.12 | Cache metadata manifest — deterministic JSON manifest after commit, atomic write, manifest outcome in report |
 | 6.13 | Cache reconciliation planner — pure/no I/O comparison of manifest, cache filesystem, and announcement; orphan detection, hash mismatch, corrupted manifest recovery; report-only |
+| 6.14 | Cache repair execution design — mutation-boundary design for planner-derived repair, atomicity, rollback, crash safety, and operator opt-in; docs only |
 
 ---
 
@@ -413,6 +414,16 @@ Cache metadata manifest:
 - No I/O inside planner, no cache mutation, no repair execution, no network, no runtime activation
 - 22 unit tests: empty, consistent, missing manifest entry, missing cache file, hash mismatch, orphan, announcement missing, corrupted flag, deterministic ordering, labels, healthy check, text/JSON output, combined issues, duplicate keys, stability
 - 60 client unit tests, 625 workspace tests passing
+
+### M6.14 — Cache Repair Execution Design ✅
+
+- Added `docs/cache-repair-execution-design.md` as the design-only boundary before any automatic repair semantics
+- Defines safe mutation classes: manifest repair, refetch/replace, manifest recovery, orphan cleanup, and report-only `AnnouncementMissing`
+- Establishes explicit operator controls, dry-run parity, deterministic execution order, and cache-directory-scoped serialization
+- Defines atomicity and rollback model: staged fetch + verify + atomic rename; manifest updated after successful file mutation; no rollback of committed files when manifest sync fails
+- Defines crash recovery expectations and idempotent rerun behavior using reconciliation as the passive truth layer
+- Recommends milestone split: M6.15 repair executor, M6.16 orphan cleanup, M6.17 optional hooks
+- No runtime changes, no repair executor, no orphan deletion, no background reconciliation
 
 ---
 

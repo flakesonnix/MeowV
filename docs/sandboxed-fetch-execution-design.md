@@ -184,6 +184,9 @@ Implementation milestones after this design:
 - **M6.13**: Cache reconciliation planner — pure/no I/O comparison of
   manifest, cache filesystem, and announcement; orphan detection, hash
   mismatch, corrupted manifest recovery; report-only.
+- **M6.14**: Cache repair execution design — planner-to-mutation boundary,
+  operator opt-in, atomicity, rollback, crash safety, and deletion separation;
+  docs only.
 
 ## Future Milestone Details
 
@@ -247,6 +250,20 @@ Implementation milestones after this design:
 - Text and JSON report output via `to_text()` / `to_json()`
 - 22 unit tests, no integration tests, no CLI flags
 - No repair execution, no cache mutation, no network, no runtime activation
+
+### M6.14 — Cache Repair Execution Design
+
+- Design-only milestone: `docs/cache-repair-execution-design.md`
+- Defines repair classes and recommended sequencing:
+  - M6.15 refetch + manifest repair executor
+  - M6.16 orphan cleanup executor
+  - M6.17 optional hooks/integration points
+- Repair remains planner-derived and explicit opt-in only
+- Dry-run parity required before mutation
+- First executor milestone excludes orphan deletion and `AnnouncementMissing`
+- Atomicity rule preserved: staged fetch -> verify -> commit -> manifest sync
+- Crash model and partial failure semantics rely on reconciliation to explain
+  any residual drift safely
 
 ## Hard Boundaries
 
@@ -318,3 +335,13 @@ Implementation milestones after this design:
 - No I/O inside planner, no cache mutation, no repair execution.
 - 22 unit tests: all action variants, ordering, output formats, stability.
 - 60 client unit tests, 625 workspace tests passing.
+
+### M6.14 — Cache Repair Execution Design ✅
+
+- Added `docs/cache-repair-execution-design.md`.
+- Defines operator controls, repair atomicity, rollback boundaries, crash
+  recovery, locking expectations, and dry-run parity.
+- Recommends narrow first executor scope: `MissingCacheFile`, `HashMismatch`,
+  `MissingManifestEntry`, `ManifestCorrupted`.
+- Defers orphan deletion and background repair hooks to later milestones.
+- No code changes, no runtime changes, no mutation introduced.
