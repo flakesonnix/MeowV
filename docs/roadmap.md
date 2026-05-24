@@ -60,6 +60,21 @@
 | 4.12 | Heartbeat policy report in admin/status — `heartbeat=<label>` per-session in `sessions`/`diagnostics` output; `to_short_label()` on `HeartbeatDecision`; tests; docs |
 | 4.13 | Heartbeat policy config plumbing — `[heartbeat]` TOML section; `HeartbeatSection` with `Default → ReportOnly`; policy threaded through registry snapshot, diagnostics, admin output, and `ServerRuntimeStatus`; no enforcement |
 | 4.14 | Strict heartbeat enforcement wiring — `ClientHeartbeatPolicy` enum; client-side `heartbeat_loop` enforces disconnect at threshold under `Strict`; `--heartbeat-policy` CLI flag; `enforcement_disconnect` field on `HeartbeatMetrics`; 7 new tests |
+| 4.15 | Heartbeat authority design — document why server-side enforcement is unreachable today; compare client-reported health vs server-initiated Ping; recommend server-initiated path for future enforcement; design doc only, no live changes |
+
+---
+
+## Milestone 4.15
+
+Heartbeat authority design (docs only):
+
+- Documents why `WouldDisconnectMissedHeartbeat` is unreachable server-side today (server always has `timeout_or_error=0`)
+- Compares Option A (client-reported `HeartbeatHealthReport`) vs Option B (server-initiated `ServerPing`/`ServerPong`)
+- Establishes trust model: client-reported metrics are diagnostics only; server-initiated ping is authoritative for enforcement
+- Recommends Option B (server-initiated) for future authoritative disconnect enforcement
+- Maps future milestone path: M4.16 client-reported health (diagnostic), M4.17 server-initiated ping (authoritative enforcement)
+- No protocol wire changes, no live code changes, no enforcement
+- New doc: `docs/heartbeat-authority-design.md`
 
 ---
 
