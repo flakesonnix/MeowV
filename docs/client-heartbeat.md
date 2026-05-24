@@ -89,3 +89,16 @@ Client Responds to ServerPing (M4.17):
 - `heartbeat::send_ping_and_wait_with_timeout` intercepts `ServerPing` while waiting for a client-initiated `Pong`: replies inline, then continues waiting for the matching `Pong`. Sequence fidelity is preserved — each `ServerPong` echoes the `ServerPing` sequence exactly.
 - Future milestone (M4.18+) will wire the server-side scheduler: server sends `ServerPing` on interval, tracks missed `ServerPong` replies, disconnects under `Strict` when threshold reached.
 - This is the authoritative liveness path: server owns the timer and measures directly — no trust assumption on client-reported data.
+
+Server-Side ServerPing Scheduler (M4.18):
+
+- `HeartbeatSection.server_ping_interval_ms: u64` — new config field; default 5000 ms; `0` disables server-initiated pings entirely.
+- `example.server.toml` gains `server_ping_interval_ms = 5000` under `[heartbeat]`.
+- `SessionEventKind::ServerPingSent` and `SessionEventKind::ServerPongReceived` — two new event log kinds for audit trail.
+- `SessionRegistryEntry` gains `server_ping_sent_count: usize` and `server_pong_received_count: usize`; surfaced as `srv_ping_tx=N  srv_pong_rx=N` in `to_diagnostics_text()`.
+- `SessionRegistry::update_server_heartbeat_counts()` — targeted update method; called after every `ServerPingSent` and `ServerPongReceived` event.
+- `SessionDiagnostics` gains `server_ping_sent_count` and `server_pong_received_count`; populated from event log; appear in `to_text()` and `to_json_stub()`.
+- Scheduler runs inside `handle_client` post-handshake `select!` loop: `interval_at(now + dur, dur)` schedules first tick after one full interval (no t=0 fire); `MissedTickBehavior::Delay` prevents burst catch-up.
+- `if srv_ping_enabled` guard on the tick branch disables it entirely when `server_ping_interval_ms == 0` — future is not polled when disabled.
+- `ServerPong` replies are validated for sequence fidelity at `info` level only — mismatch logged but not fatal under `ReportOnly` policy.
+- No disconnect enforcement in this milestone regardless of policy. `Strict` enforcement for missed server pongs is a future milestone.

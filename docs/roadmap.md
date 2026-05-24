@@ -63,6 +63,25 @@
 | 4.15 | Heartbeat authority design — document why server-side enforcement is unreachable today; compare client-reported health vs server-initiated Ping; recommend server-initiated path for future enforcement; design doc only, no live changes |
 | 4.16 | Server-initiated heartbeat protocol stub — add `ServerMessage::ServerPing` and `ClientMessage::ServerPong` DTOs; server handler ignores `ServerPong` (inert); 8 round-trip tests; no timer, no enforcement |
 | 4.17 | Client responds to ServerPing — client receive loop and heartbeat path reply `ServerPong(sequence)` to `ServerPing(sequence)`; `handle_server_ping` public helper; 5 integration tests |
+| 4.18 | Server-side ServerPing scheduler, report-only — per-session `interval_at` timer sends `ServerPing` after handshake; `ServerPong` replies recorded; `srv_ping_tx` / `srv_pong_rx` in registry + diagnostics; `server_ping_interval_ms` config; 7 integration tests; no enforcement |
+
+---
+
+## Milestone 4.18
+
+Server-side ServerPing scheduler, report-only:
+
+- `server_ping_interval_ms: u64` added to `HeartbeatSection` in config (default: 5000; 0 = disabled)
+- `SessionEventKind::ServerPingSent` and `ServerPongReceived` added to event log
+- `SessionRegistryEntry` gains `server_ping_sent_count` and `server_pong_received_count`
+- `SessionRegistry::update_server_heartbeat_counts()` — call after each ServerPong received
+- `SessionRegistrySnapshot::to_diagnostics_text()` includes `srv_ping_tx=N  srv_pong_rx=N` per session
+- `SessionDiagnostics` gains `server_ping_sent_count` and `server_pong_received_count`; surfaced in `to_text()` and `to_json_stub()`
+- Post-handshake loop in `handle_client` converted to `loop { tokio::select! { ... } }` with `interval_at(now+dur, dur)` timer branch guarded by `if srv_ping_enabled`
+- `ClientMessage::ServerPong` arm now active: records `ServerPongReceived` event, updates registry
+- `example.server.toml` updated with `server_ping_interval_ms = 5000`
+- 7 integration tests: server sends ping after handshake, sequences increment, pong reply updates counts, mismatched pong not fatal, report-only never disconnects, cleanup stops scheduler, diagnostics shows counts
+- No strict enforcement, no disconnect on missed pong
 
 ---
 
