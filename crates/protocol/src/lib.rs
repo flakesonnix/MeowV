@@ -1190,9 +1190,7 @@ impl ResourceFetchExecutionStep {
             Self::StageToTemporaryPath => "stage to temporary path",
             Self::EnforceExpectedSize => "enforce expected size",
             Self::VerifySha256BeforeCacheMove => "verify sha256 before cache move",
-            Self::WouldCommitToCacheAfterVerification => {
-                "would commit to cache after verification"
-            }
+            Self::WouldCommitToCacheAfterVerification => "would commit to cache after verification",
             Self::BlockedBySourcePolicy => "blocked by source policy",
             Self::BlockedByMissingSelectedSource => "blocked by missing selected source",
             Self::BlockedByUnsupportedScheme => "blocked by unsupported scheme",
@@ -1287,9 +1285,7 @@ pub fn build_fetch_execution_plan(
 
     for entry in &preflight.entries {
         let (plan_ok, steps, block_reason) = match entry.action {
-            ResourceDownloadPreflightAction::AlreadyAvailable => {
-                (true, Vec::new(), None)
-            }
+            ResourceDownloadPreflightAction::AlreadyAvailable => (true, Vec::new(), None),
             ResourceDownloadPreflightAction::FetchMissing
             | ResourceDownloadPreflightAction::ReplaceInvalid
             | ResourceDownloadPreflightAction::WouldVerifyAfterFetch => {
@@ -1299,34 +1295,27 @@ pub fn build_fetch_execution_plan(
                         vec![ResourceFetchExecutionStep::BlockedByMissingSelectedSource],
                         Some("no selected source available".to_string()),
                     ),
-                    Some(_) => {
-                        match &entry.source_policy {
-                            Some(policy) if !policy.decision.is_allowed() => (
-                                false,
-                                vec![ResourceFetchExecutionStep::BlockedBySourcePolicy],
-                                Some(policy.decision.to_label()),
-                            ),
-                            _ => {
-                                let allowed_schemes: Vec<&str> =
-                                    DEFAULT_ALLOWED_FETCH_SCHEMES.to_vec();
-                                let scheme = entry
-                                    .selected_source
-                                    .as_ref()
-                                    .map(|s| s.scheme.as_str())
-                                    .unwrap_or("");
-                                if !allowed_schemes.contains(&scheme) {
-                                    (
-                                        false,
-                                        vec![
-                                            ResourceFetchExecutionStep::BlockedByUnsupportedScheme,
-                                        ],
-                                        Some(format!(
-                                            "scheme '{}' is not supported for fetch",
-                                            scheme
-                                        )),
-                                    )
-                                } else {
-                                    (
+                    Some(_) => match &entry.source_policy {
+                        Some(policy) if !policy.decision.is_allowed() => (
+                            false,
+                            vec![ResourceFetchExecutionStep::BlockedBySourcePolicy],
+                            Some(policy.decision.to_label()),
+                        ),
+                        _ => {
+                            let allowed_schemes: Vec<&str> = DEFAULT_ALLOWED_FETCH_SCHEMES.to_vec();
+                            let scheme = entry
+                                .selected_source
+                                .as_ref()
+                                .map(|s| s.scheme.as_str())
+                                .unwrap_or("");
+                            if !allowed_schemes.contains(&scheme) {
+                                (
+                                    false,
+                                    vec![ResourceFetchExecutionStep::BlockedByUnsupportedScheme],
+                                    Some(format!("scheme '{}' is not supported for fetch", scheme)),
+                                )
+                            } else {
+                                (
                                         true,
                                         vec![
                                             ResourceFetchExecutionStep::UseSelectedSource,
@@ -1337,18 +1326,21 @@ pub fn build_fetch_execution_plan(
                                         ],
                                         None,
                                     )
-                                }
                             }
                         }
-                    }
+                    },
                 }
             }
-            ResourceDownloadPreflightAction::BlockedBySignaturePolicy => {
-                (false, Vec::new(), Some("blocked by signature policy".to_string()))
-            }
-            ResourceDownloadPreflightAction::BlockedByResourcePolicy => {
-                (false, Vec::new(), Some("blocked by resource policy".to_string()))
-            }
+            ResourceDownloadPreflightAction::BlockedBySignaturePolicy => (
+                false,
+                Vec::new(),
+                Some("blocked by signature policy".to_string()),
+            ),
+            ResourceDownloadPreflightAction::BlockedByResourcePolicy => (
+                false,
+                Vec::new(),
+                Some("blocked by resource policy".to_string()),
+            ),
             ResourceDownloadPreflightAction::UnsupportedResource => (
                 false,
                 Vec::new(),
@@ -3917,15 +3909,13 @@ mod tests {
         };
         let (valid_sources, source_errors) = match &file.sources {
             None => (Vec::new(), Vec::new()),
-            Some(s) => match validate_and_order_sources(&file) {
+            Some(_) => match validate_and_order_sources(&file) {
                 Ok(v) => (v, Vec::new()),
                 Err(e) => (Vec::new(), vec![e.to_string()]),
             },
         };
         let (selected_source, fallback_sources) = select_fetch_source(&valid_sources);
-        let source_policy = selected_source
-            .as_ref()
-            .map(evaluate_fetch_source_policy);
+        let source_policy = selected_source.as_ref().map(evaluate_fetch_source_policy);
         ResourceDownloadPreflightEntry {
             resource_name: "chat".to_string(),
             file_path: file.relative_path.clone(),
@@ -3963,18 +3953,9 @@ mod tests {
         let e = &plan.entries[0];
         assert!(e.plan_ok);
         assert_eq!(e.steps.len(), 5);
-        assert_eq!(
-            e.steps[0],
-            ResourceFetchExecutionStep::UseSelectedSource
-        );
-        assert_eq!(
-            e.steps[1],
-            ResourceFetchExecutionStep::StageToTemporaryPath
-        );
-        assert_eq!(
-            e.steps[2],
-            ResourceFetchExecutionStep::EnforceExpectedSize
-        );
+        assert_eq!(e.steps[0], ResourceFetchExecutionStep::UseSelectedSource);
+        assert_eq!(e.steps[1], ResourceFetchExecutionStep::StageToTemporaryPath);
+        assert_eq!(e.steps[2], ResourceFetchExecutionStep::EnforceExpectedSize);
         assert_eq!(
             e.steps[3],
             ResourceFetchExecutionStep::VerifySha256BeforeCacheMove
@@ -3997,12 +3978,16 @@ mod tests {
         let plan = build_fetch_execution_plan(&preflight);
         let e = &plan.entries[0];
         assert!(!e.plan_ok);
-        assert!(e
-            .block_reason
-            .as_deref()
-            .unwrap_or("")
-            .contains("no selected source"));
-        assert!(e.steps.contains(&ResourceFetchExecutionStep::BlockedByMissingSelectedSource));
+        assert!(
+            e.block_reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("no selected source")
+        );
+        assert!(
+            e.steps
+                .contains(&ResourceFetchExecutionStep::BlockedByMissingSelectedSource)
+        );
     }
 
     #[test]
@@ -4062,11 +4047,12 @@ mod tests {
         let plan = build_fetch_execution_plan(&preflight);
         let e = &plan.entries[0];
         assert!(!e.plan_ok);
-        assert!(e
-            .block_reason
-            .as_deref()
-            .unwrap_or("")
-            .contains("signature"));
+        assert!(
+            e.block_reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("signature")
+        );
     }
 
     #[test]
@@ -4234,8 +4220,7 @@ mod tests {
             json.contains("use_selected_source"),
             "JSON should include steps:\n{json}"
         );
-        let deserialized: ResourceFetchExecutionPlan =
-            serde_json::from_str(&json).unwrap();
+        let deserialized: ResourceFetchExecutionPlan = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, plan);
     }
 
@@ -4261,7 +4246,11 @@ mod tests {
         let plan = build_fetch_execution_plan(&preflight);
         let e = &plan.entries[0];
         assert!(e.plan_ok);
-        assert_eq!(e.steps.len(), 5, "WouldVerifyAfterFetch should plan 5 steps");
+        assert_eq!(
+            e.steps.len(),
+            5,
+            "WouldVerifyAfterFetch should plan 5 steps"
+        );
     }
 
     #[test]
