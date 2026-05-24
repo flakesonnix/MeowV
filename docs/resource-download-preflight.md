@@ -1,52 +1,28 @@
-# Resource Download Preflight
+Resource Download Preflight (M6.1)
 
-## Purpose
+Purpose:
 
-Define report-only planner for resource fetch/repair needs before any future
-download milestone.
+- Expose deterministic, report-only resource download preflight planner via CLI.
+- No network I/O, no cache writes, no execution, no mutation.
 
-## Inputs
+Usage:
 
-- `ResourceAnnouncement`
-- local availability/cache result
-- signature verification result + active signature policy
-- resource policy evaluation, if available
+- Offline announce file inspection:
 
-## Output
+  --plan-resource-downloads <announcement.json> [--resource-cache <path>] [--trusted-keys <path>] [--signature-policy strict|report_only]
 
-Deterministic preflight plan only.
+- Examples:
 
-Actions:
+  Inspect announcement with default report-only signature policy:
 
-- `AlreadyAvailable`
-- `FetchMissing`
-- `ReplaceInvalid`
-- `BlockedBySignaturePolicy`
-- `BlockedByResourcePolicy`
-- `UnsupportedResource`
-- `WouldVerifyAfterFetch`
+  client --plan-resource-downloads /path/to/announcement.json
 
-## Invariants
+  Inspect announcement and consider an existing local cache for availability:
 
-- No network I/O
-- No cache writes
-- No resource execution
-- No hidden mutation
-- Ordering deterministic by resource, file, action
-- Signature strict block wins over fetch/repair action
-- Resource policy block wins over fetch/repair action
-- Missing file may emit both `FetchMissing` and `WouldVerifyAfterFetch`
+  client --plan-resource-downloads /path/to/announcement.json --resource-cache /path/to/cache
 
-## Non-Goals
+Notes:
 
-- No actual download protocol
-- No staging directory writes
-- No cache commit
-- No background repair
-
-## Follow-up Milestones
-
-- M6.1: CLI/report command
-- M6.2: source URL / fetch metadata design
-- M6.3: safe fetch sandbox design
-- M6.4: first explicit-flag download implementation
+- Output is deterministic text from ResourceDownloadPreflightPlan::to_text().
+- Command never performs downloads or cache writes. It only reads the announcement file and, optionally, inspects a local cache directory when --resource-cache is provided.
+- When signature policy is strict, --trusted-keys is required and validated.

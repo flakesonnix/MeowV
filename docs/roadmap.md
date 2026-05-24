@@ -180,6 +180,12 @@ Resource download preflight / safe fetch planning:
 - Deterministic `to_text()` output and sorted mixed-resource entries
 - New doc: `docs/resource-download-preflight.md`
 
+### 6.1 — CLI: Resource Download Preflight Report
+
+- `client --plan-resource-downloads <announcement.json>`: print deterministic preflight plan (report-only).
+- Supports `--resource-cache` to include local cache availability, `--trusted-keys` + `--signature-policy strict` to evaluate signature gating (strict requires keys).
+- No network I/O, no cache writes, no execution. Deterministic `to_text()` output.
+
 ---
 
 ## Milestone 4.21
