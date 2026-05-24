@@ -1,4 +1,5 @@
 // Library facade for the client crate so integration tests can access helpers.
+pub mod fetch;
 pub mod heartbeat;
 
 use anyhow::Context;
