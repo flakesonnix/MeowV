@@ -301,3 +301,63 @@ async fn strict_partial_pong_history_still_disconnects_at_threshold() -> Result<
     server_task.abort();
     Ok(())
 }
+
+#[tokio::test]
+async fn strict_enforcement_independent_of_client_ping_activity() -> Result<()> {
+    // Client sends client-initiated Pings (and receives Pong replies) throughout the
+    // session but never replies to ServerPong. Strict enforcement must still fire on
+    // the server-initiated direction — the two directions are independent.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let config = make_config(&addr.to_string(), 15, HeartbeatPolicy::Strict);
+
+    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+
+    let (mut w, mut lines) = connect_and_complete_handshake(addr).await?;
+
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let wait_budget_ms = (threshold + 3) * 15 + 300;
+
+    let stream_closed = timeout(Duration::from_millis(wait_budget_ms), async {
+        let mut seq = 1u64;
+        loop {
+            tokio::select! {
+                line = lines.next_line() => {
+                    match line {
+                        Ok(None) | Err(_) => return true, // EOF — server closed connection
+                        Ok(Some(line_str)) => {
+                            match protocol::decode_server_line(&line_str) {
+                                Ok(ServerMessage::ServerPing { .. }) => {
+                                    // Intentionally ignore — do not reply with ServerPong
+                                }
+                                Ok(ServerMessage::Pong { .. }) | Ok(ServerMessage::EntitySnapshot { .. }) | Ok(ServerMessage::ChatBroadcast { .. }) => {}
+                                Ok(ServerMessage::Disconnect { .. }) => return true,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                // Send a client-initiated Ping every 10 ms to exercise the other direction.
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                    let _ = w.write_all(
+                        protocol::encode_line(&ClientMessage::Ping { sequence: seq })
+                            .unwrap()
+                            .as_bytes(),
+                    ).await;
+                    seq += 1;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(
+        stream_closed,
+        "Strict enforcement must disconnect even when client-initiated heartbeat direction is healthy"
+    );
+
+    server_task.abort();
+    Ok(())
+}
