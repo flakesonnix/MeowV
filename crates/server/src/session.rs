@@ -15,6 +15,7 @@ pub enum SessionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum SessionStateError {
     InvalidTransition {
         from: SessionState,

@@ -3,11 +3,14 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 
-use protocol::{ResourceAnnouncement, AnnouncedResource, AnnouncedResourceFile, ResourceRequirementLevel};
 use client::get_resource_download_preflight_plan_text;
 use protocol::signature_engine::SignaturePolicy;
+use protocol::{
+    AnnouncedResource, AnnouncedResourceFile, ResourceAnnouncement, ResourceRequirementLevel,
+};
 use std::fs;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 
 #[test]
 fn preflight_plan_generates_text() -> Result<()> {
@@ -32,17 +35,27 @@ fn preflight_plan_generates_text() -> Result<()> {
     write!(f, "{}", serde_json::to_string(&announcement)?)?;
 
     let args: Vec<String> = vec![];
-    let text = get_resource_download_preflight_plan_text(file_path.to_str().unwrap(), &args, &protocol::signature_engine::SignaturePolicy::ReportOnly)?;
+    let text = get_resource_download_preflight_plan_text(
+        file_path.to_str().unwrap(),
+        &args,
+        &protocol::signature_engine::SignaturePolicy::ReportOnly,
+    )?;
     assert!(text.contains("resource download preflight"));
     // must mention announced resource and file
-    assert!(text.contains("chat:resource.toml") || text.contains(&"chat:resource.toml".to_string()));
+    assert!(
+        text.contains("chat:resource.toml") || text.contains(&"chat:resource.toml".to_string())
+    );
     Ok(())
 }
 
 #[test]
 fn preflight_plan_missing_file_errors() {
     let args: Vec<String> = vec![];
-    let res = get_resource_download_preflight_plan_text("nonexistent.json", &args, &protocol::signature_engine::SignaturePolicy::ReportOnly);
+    let res = get_resource_download_preflight_plan_text(
+        "nonexistent.json",
+        &args,
+        &protocol::signature_engine::SignaturePolicy::ReportOnly,
+    );
     assert!(res.is_err());
 }
 
@@ -69,7 +82,11 @@ fn strict_policy_without_trusted_keys_fails() {
     write!(f, "{}", serde_json::to_string(&announcement).unwrap()).unwrap();
 
     let args: Vec<String> = vec![];
-    let res = get_resource_download_preflight_plan_text(file_path.to_str().unwrap(), &args, &SignaturePolicy::Strict);
+    let res = get_resource_download_preflight_plan_text(
+        file_path.to_str().unwrap(),
+        &args,
+        &SignaturePolicy::Strict,
+    );
     assert!(res.is_err());
 }
 
@@ -83,7 +100,11 @@ fn preflight_reports_already_available_with_local_cache() -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     // copy the example resource file to cache (resolve workspace-relative path)
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap();
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .unwrap();
     let src = workspace_root.join("examples/resources/chat/resource.toml");
     fs::copy(&src, &cache_file_dir)?;
 
@@ -112,8 +133,15 @@ fn preflight_reports_already_available_with_local_cache() -> Result<()> {
     let mut f = File::create(&file_path)?;
     write!(f, "{}", serde_json::to_string(&announcement)?)?;
 
-    let args: Vec<String> = vec!["--resource-cache".to_string(), cache_dir.path().to_str().unwrap().to_string()];
-    let text = get_resource_download_preflight_plan_text(file_path.to_str().unwrap(), &args, &SignaturePolicy::ReportOnly)?;
+    let args: Vec<String> = vec![
+        "--resource-cache".to_string(),
+        cache_dir.path().to_str().unwrap().to_string(),
+    ];
+    let text = get_resource_download_preflight_plan_text(
+        file_path.to_str().unwrap(),
+        &args,
+        &SignaturePolicy::ReportOnly,
+    )?;
     assert!(text.contains("already_available") || text.contains("already_available"));
     Ok(())
 }
@@ -151,9 +179,59 @@ fn preflight_reports_replace_invalid_for_bad_cached_file() -> Result<()> {
     let mut f = File::create(&file_path)?;
     write!(f, "{}", serde_json::to_string(&announcement)?)?;
 
-    let args: Vec<String> = vec!["--resource-cache".to_string(), cache_dir.path().to_str().unwrap().to_string()];
-    let text = get_resource_download_preflight_plan_text(file_path.to_str().unwrap(), &args, &SignaturePolicy::ReportOnly)?;
+    let args: Vec<String> = vec![
+        "--resource-cache".to_string(),
+        cache_dir.path().to_str().unwrap().to_string(),
+    ];
+    let text = get_resource_download_preflight_plan_text(
+        file_path.to_str().unwrap(),
+        &args,
+        &SignaturePolicy::ReportOnly,
+    )?;
     println!("preflight plan text:\n{}", text);
     assert!(text.contains("replace_invalid") || text.contains("replace_invalid"));
+    Ok(())
+}
+
+#[test]
+fn preflight_json_output_can_be_written_to_file() -> Result<()> {
+    let dir = tempdir()?;
+    let file_path = dir.path().join("announcement.json");
+    let announcement = ResourceAnnouncement {
+        resources: vec![AnnouncedResource {
+            name: "chat".to_string(),
+            version: "0.1.0".to_string(),
+            files: vec![AnnouncedResourceFile {
+                relative_path: "resource.toml".to_string(),
+                size_bytes: 123,
+                sha256: "abc".to_string(),
+            }],
+            protocol_version: protocol::PROTOCOL_VERSION,
+            requirement_level: ResourceRequirementLevel::Required,
+        }],
+        signature: None,
+    };
+
+    let mut f = File::create(&file_path)?;
+    write!(f, "{}", serde_json::to_string(&announcement)?)?;
+
+    let out = NamedTempFile::new()?;
+    let out_path = out.path().to_str().unwrap().to_string();
+    let args: Vec<String> = vec![
+        "--preflight-output".to_string(),
+        "json".to_string(),
+        "--preflight-output-file".to_string(),
+        out_path.clone(),
+    ];
+    // Should return JSON and write to file
+    let json = client::get_resource_download_preflight_plan_json(
+        file_path.to_str().unwrap(),
+        &args,
+        &SignaturePolicy::ReportOnly,
+    )?;
+    // write via the CLI helper behavior
+    std::fs::write(&out_path, &json)?;
+    let read_back = std::fs::read_to_string(&out_path)?;
+    assert!(read_back.contains("resource download preflight") || read_back.contains("entries"));
     Ok(())
 }

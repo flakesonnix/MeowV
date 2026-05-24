@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use game_edition::{detect_installed_game, GameEdition, GamePlatform};
+use game_edition::{GameEdition, GamePlatform, detect_installed_game};
 use protocol::PROTOCOL_VERSION;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -164,10 +164,7 @@ impl CacheRepairPlan {
 
     pub fn to_text(&self) -> String {
         let mut lines = Vec::new();
-        lines.push(format!(
-            "Cache Repair Plan: {} entries",
-            self.entries.len()
-        ));
+        lines.push(format!("Cache Repair Plan: {} entries", self.entries.len()));
         lines.push(format!("  Fetch Missing: {}", self.fetch_missing_count));
         lines.push(format!("  Replace Invalid: {}", self.replace_invalid_count));
         lines.push(format!("  Verify Only: {}", self.verify_only_count));
@@ -1218,9 +1215,10 @@ mod tests {
         let err =
             parse_manifest_toml(&valid_manifest().replace("name = \"chat\"", "name = \"Chat!\""))
                 .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("resource name contains invalid characters"));
+        assert!(
+            err.to_string()
+                .contains("resource name contains invalid characters")
+        );
     }
 
     #[test]
@@ -1240,9 +1238,10 @@ mod tests {
             "client = \"../client/main.js\"",
         ))
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("entrypoint path cannot contain parent-directory traversal"));
+        assert!(
+            err.to_string()
+                .contains("entrypoint path cannot contain parent-directory traversal")
+        );
     }
 
     #[test]
@@ -1251,9 +1250,10 @@ mod tests {
             &valid_manifest().replace("name = \"core_ui\"", "name = \"Core UI\""),
         )
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("dependency name contains invalid characters"));
+        assert!(
+            err.to_string()
+                .contains("dependency name contains invalid characters")
+        );
     }
 
     #[test]
@@ -1310,9 +1310,10 @@ mod tests {
         );
 
         let err = build_pack_index(&dir).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("resource name contains invalid characters"));
+        assert!(
+            err.to_string()
+                .contains("resource name contains invalid characters")
+        );
     }
 
     #[test]
@@ -1373,17 +1374,19 @@ mod tests {
     #[test]
     fn reject_absolute_resource_file_path() {
         let err = validate_resource_file_path(Path::new("/tmp/file.txt")).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("resource file path must be relative"));
+        assert!(
+            err.to_string()
+                .contains("resource file path must be relative")
+        );
     }
 
     #[test]
     fn reject_parent_traversal_resource_file_path() {
         let err = validate_resource_file_path(Path::new("../file.txt")).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("resource file path cannot contain parent-directory traversal"));
+        assert!(
+            err.to_string()
+                .contains("resource file path cannot contain parent-directory traversal")
+        );
     }
 
     #[test]
@@ -1497,7 +1500,10 @@ mod tests {
             .filter(|e| e.action == CacheRepairAction::FetchMissing)
             .collect();
         assert_eq!(missing_entries.len(), 1);
-        assert_eq!(missing_entries[0].relative_path, PathBuf::from("client/main.lua"));
+        assert_eq!(
+            missing_entries[0].relative_path,
+            PathBuf::from("client/main.lua")
+        );
     }
 
     #[test]
@@ -1520,7 +1526,10 @@ mod tests {
             .filter(|e| e.action == CacheRepairAction::ReplaceInvalid)
             .collect();
         assert_eq!(replace_entries.len(), 1);
-        assert_eq!(replace_entries[0].relative_path, PathBuf::from("server/main.lua"));
+        assert_eq!(
+            replace_entries[0].relative_path,
+            PathBuf::from("server/main.lua")
+        );
     }
 
     #[test]
@@ -1652,9 +1661,10 @@ mod tests {
         symlink(&target, &link).unwrap();
 
         let err = verify_cache_for_resource(&resource_dir, &cache_dir).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("symlinks are not supported in cache verification"));
+        assert!(
+            err.to_string()
+                .contains("symlinks are not supported in cache verification")
+        );
     }
 
     #[test]
@@ -1838,10 +1848,12 @@ mod tests {
         let root = create_registry_root(&[("chat", registry_manifest("chat", &[]))]);
 
         let plan = build_load_plan_from_root(&root).unwrap();
-        assert!(plan.resources[0]
-            .entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.kind == ResourceEntrypointKind::Server));
+        assert!(
+            plan.resources[0]
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.kind == ResourceEntrypointKind::Server)
+        );
     }
 
     #[test]
@@ -1849,10 +1861,12 @@ mod tests {
         let root = create_registry_root(&[("chat", registry_manifest("chat", &[]))]);
 
         let plan = build_load_plan_from_root(&root).unwrap();
-        assert!(plan.resources[0]
-            .entrypoints
-            .iter()
-            .any(|entrypoint| entrypoint.kind == ResourceEntrypointKind::Client));
+        assert!(
+            plan.resources[0]
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.kind == ResourceEntrypointKind::Client)
+        );
     }
 
     #[test]
@@ -1872,9 +1886,10 @@ mod tests {
         };
 
         let err = build_load_plan(&registry, &order).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("load order references missing resource"));
+        assert!(
+            err.to_string()
+                .contains("load order references missing resource")
+        );
     }
 
     #[test]
@@ -2102,11 +2117,7 @@ mod tests {
                     platform: GamePlatform::Linux,
                 },
             );
-            if edition == GameEdition::Unknown {
-                assert_eq!(report.status, CompatibilityStatus::Compatible);
-            } else {
-                assert_eq!(report.status, CompatibilityStatus::Compatible);
-            }
+            assert_eq!(report.status, CompatibilityStatus::Compatible);
         }
     }
 

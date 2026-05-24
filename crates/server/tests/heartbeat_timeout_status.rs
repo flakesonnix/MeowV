@@ -23,7 +23,10 @@ fn make_config(addr: &str, ping_interval_ms: u64, policy: HeartbeatPolicy) -> Se
             motd: "heartbeat timeout status test".to_string(),
             ..ServerSection::default()
         },
-        heartbeat: HeartbeatSection { policy, server_ping_interval_ms: ping_interval_ms },
+        heartbeat: HeartbeatSection {
+            policy,
+            server_ping_interval_ms: ping_interval_ms,
+        },
         ..ServerConfig::default()
     }
 }
@@ -38,9 +41,7 @@ where
     Ok(decode_server_line(&line)?)
 }
 
-async fn read_until_server_ping<R>(
-    lines: &mut tokio::io::Lines<BufReader<R>>,
-) -> Result<u64>
+async fn read_until_server_ping<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> Result<u64>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -69,13 +70,18 @@ async fn connect_and_complete_handshake(
     w.write_all(
         encode_line(&ClientMessage::Login {
             name: "hb_status_test".to_string(),
-            protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: protocol::current_login_capabilities(),
+        })?
         .as_bytes(),
     )
     .await?;
 
     let welcome = read_packet(&mut lines).await?;
-    assert!(matches!(welcome, ServerMessage::Welcome { .. }), "expected Welcome, got {welcome:?}");
+    assert!(
+        matches!(welcome, ServerMessage::Welcome { .. }),
+        "expected Welcome, got {welcome:?}"
+    );
 
     let announcement = read_packet(&mut lines).await?;
     let announcement = match announcement {
@@ -84,8 +90,10 @@ async fn connect_and_complete_handshake(
     };
 
     w.write_all(
-        encode_line(&ClientMessage::ResourceAvailabilityReport(build_report(&announcement)))?
-            .as_bytes(),
+        encode_line(&ClientMessage::ResourceAvailabilityReport(build_report(
+            &announcement,
+        )))?
+        .as_bytes(),
     )
     .await?;
 
@@ -113,7 +121,10 @@ fn build_report(announcement: &ResourceAnnouncement) -> ResourceAvailabilityRepo
             })
         })
         .collect();
-    ResourceAvailabilityReport { resources, is_fully_available: true }
+    ResourceAvailabilityReport {
+        resources,
+        is_fully_available: true,
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -153,7 +164,11 @@ async fn srv_heartbeat_healthy_when_pong_received() -> Result<()> {
 
     let (mut w, mut lines) = connect_and_complete_handshake(addr).await?;
 
-    let seq = timeout(Duration::from_millis(500), read_until_server_ping(&mut lines)).await??;
+    let seq = timeout(
+        Duration::from_millis(500),
+        read_until_server_ping(&mut lines),
+    )
+    .await??;
 
     // Reply immediately — check registry before next ping can fire
     w.write_all(encode_line(&ClientMessage::ServerPong { sequence: seq })?.as_bytes())
@@ -184,7 +199,11 @@ async fn srv_heartbeat_awaiting_pong_when_no_reply_sent() -> Result<()> {
     let (_w, mut lines) = connect_and_complete_handshake(addr).await?;
 
     // Wait for first ServerPing
-    let _ = timeout(Duration::from_millis(500), read_until_server_ping(&mut lines)).await??;
+    let _ = timeout(
+        Duration::from_millis(500),
+        read_until_server_ping(&mut lines),
+    )
+    .await??;
     // Do not reply — just check after first ping
     sleep(Duration::from_millis(5)).await;
 
@@ -221,7 +240,7 @@ async fn srv_heartbeat_strict_enforcement_removes_session_at_threshold() -> Resu
     let (_w, _lines) = connect_and_complete_handshake(addr).await?;
 
     // Wait until >= threshold pings would fire plus handler cleanup time.
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
     let wait_ms = (threshold + 3) * 20 + 150;
     sleep(Duration::from_millis(wait_ms)).await;
 
@@ -249,12 +268,10 @@ async fn srv_heartbeat_report_only_never_shows_would_disconnect() -> Result<()> 
     let (_w, mut lines) = connect_and_complete_handshake(addr).await?;
 
     // Let >= threshold pings fire
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
     sleep(Duration::from_millis((threshold + 2) * 20 + 50)).await;
 
-    while let Ok(Ok(Some(_))) =
-        timeout(Duration::from_millis(5), lines.next_line()).await
-    {}
+    while let Ok(Ok(Some(_))) = timeout(Duration::from_millis(5), lines.next_line()).await {}
 
     let snap = server_state.registry.lock().unwrap().snapshot();
     let entry = &snap.sessions[0];

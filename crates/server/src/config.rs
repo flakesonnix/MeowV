@@ -4,8 +4,8 @@ use std::path::Path;
 use crate::enforcement::SessionEnforcementPolicy;
 use crate::heartbeat_planner::HeartbeatPolicy;
 use anyhow::Context;
-use protocol::signature_engine::SignaturePolicy;
 use protocol::PROTOCOL_VERSION;
+use protocol::signature_engine::SignaturePolicy;
 use serde::Deserialize;
 
 /// Error from [`ServerConfig::validate`].
@@ -64,17 +64,12 @@ impl Default for ProtocolSection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityPolicy {
+    #[default]
     ReportOnly,
     Strict,
-}
-
-impl Default for CapabilityPolicy {
-    fn default() -> Self {
-        Self::ReportOnly
-    }
 }
 
 // --- Section: [resources] ---
@@ -97,16 +92,11 @@ impl Default for ResourcesSection {
 
 // --- Section: [join_gate] ---
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinGateConfigMode {
+    #[default]
     DryRun,
-}
-
-impl Default for JoinGateConfigMode {
-    fn default() -> Self {
-        JoinGateConfigMode::DryRun
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -127,17 +117,12 @@ impl Default for JoinGateSection {
 
 // --- Section: [diagnostics] ---
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticsFormat {
+    #[default]
     Text,
     JsonStub,
-}
-
-impl Default for DiagnosticsFormat {
-    fn default() -> Self {
-        DiagnosticsFormat::Text
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -160,20 +145,15 @@ impl Default for DiagnosticsSection {
 
 // --- Section: [logging] ---
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogLevel {
     Trace,
     Debug,
+    #[default]
     Info,
     Warn,
     Error,
-}
-
-impl Default for LogLevel {
-    fn default() -> Self {
-        LogLevel::Info
-    }
 }
 
 impl LogLevel {
@@ -188,17 +168,12 @@ impl LogLevel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LogFormat {
+    #[default]
     Text,
     Json,
-}
-
-impl Default for LogFormat {
-    fn default() -> Self {
-        LogFormat::Text
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -221,18 +196,10 @@ impl Default for LoggingSection {
 
 // --- Section: [admin] ---
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct AdminSection {
     pub local_stdin_enabled: bool,
-}
-
-impl Default for AdminSection {
-    fn default() -> Self {
-        Self {
-            local_stdin_enabled: false,
-        }
-    }
 }
 
 // --- Section: [enforcement] ---
@@ -290,7 +257,7 @@ impl Default for HeartbeatSection {
 
 // --- Top-level config ---
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
     pub server: ServerSection,
@@ -303,23 +270,6 @@ pub struct ServerConfig {
     pub enforcement: EnforcementSection,
     pub signature: SignatureSection,
     pub heartbeat: HeartbeatSection,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerSection::default(),
-            protocol: ProtocolSection::default(),
-            resources: ResourcesSection::default(),
-            join_gate: JoinGateSection::default(),
-            diagnostics: DiagnosticsSection::default(),
-            logging: LoggingSection::default(),
-            admin: AdminSection::default(),
-            enforcement: EnforcementSection::default(),
-            signature: SignatureSection::default(),
-            heartbeat: HeartbeatSection::default(),
-        }
-    }
 }
 
 impl ServerConfig {

@@ -96,7 +96,9 @@ async fn report_only_successful_handshake_reaches_ready_dry_run() -> Result<()> 
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
-                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
             .as_bytes(),
         )
         .await?;
@@ -156,7 +158,9 @@ async fn strict_successful_handshake_reaches_ready_dry_run() -> Result<()> {
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "bob".to_string(),
-                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
             .as_bytes(),
         )
         .await?;
@@ -217,7 +221,9 @@ async fn strict_version_mismatch_disconnects() -> Result<()> {
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
-                protocol_version: PROTOCOL_VERSION + 1, capabilities: protocol::current_login_capabilities() })?
+                protocol_version: PROTOCOL_VERSION + 1,
+                capabilities: protocol::current_login_capabilities(),
+            })?
             .as_bytes(),
         )
         .await?;
@@ -311,7 +317,9 @@ async fn strict_handshake_cleans_up_registry_on_disconnect() -> Result<()> {
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
-                protocol_version: PROTOCOL_VERSION + 1, capabilities: protocol::current_login_capabilities() })?
+                protocol_version: PROTOCOL_VERSION + 1,
+                capabilities: protocol::current_login_capabilities(),
+            })?
             .as_bytes(),
         )
         .await?;
@@ -418,9 +426,9 @@ async fn strict_warning_only_capability_negotiation_still_allows_handshake() -> 
 
     writer_half
         .write_all(
-            encode_line(&ClientMessage::ResourceAvailabilityReport(build_available_report(
-                &announcement,
-            )))?
+            encode_line(&ClientMessage::ResourceAvailabilityReport(
+                build_available_report(&announcement),
+            ))?
             .as_bytes(),
         )
         .await?;

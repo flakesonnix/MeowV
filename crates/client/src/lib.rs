@@ -1,21 +1,21 @@
 // Library facade for the client crate so integration tests can access helpers.
 pub mod heartbeat;
 
+use anyhow::Context;
 use anyhow::Result;
 use protocol::decode_server_line;
+use protocol::{
+    ResourceAnnouncement, ResourceAvailabilityEntry, ResourceAvailabilityReport,
+    ResourceAvailabilityStatus, check_announcement_signature_stub, evaluate_resource_policy,
+};
+use resource_manifest::{CacheFileStatus, verify_cache_for_resource};
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{BufReader, Lines};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Duration;
-use anyhow::Context;
-use protocol::{
-    ResourceAnnouncement, ResourceAvailabilityEntry, ResourceAvailabilityReport,
-    ResourceAvailabilityStatus, check_announcement_signature_stub, evaluate_resource_policy,
-};
-use resource_manifest::{verify_cache_for_resource, CacheFileStatus};
-use std::path::Path;
 
 /// Deterministic, report-only resource download preflight planner helper.
 /// Mirrors CLI behavior. Does not perform network I/O or cache writes.
@@ -26,8 +26,8 @@ pub fn get_resource_download_preflight_plan_text(
 ) -> Result<String> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read announcement file: {path}"))?;
-    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
-        .context("failed to parse ResourceAnnouncement JSON")?;
+    let announcement: ResourceAnnouncement =
+        serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
 
     // Simple flag parser for tests/CLI-like calls
     fn read_flag(args: &[String], name: &str) -> Option<String> {
@@ -39,9 +39,9 @@ pub fn get_resource_download_preflight_plan_text(
     // Enforce signature policy CLI semantics: strict requires trusted keys path
     let has_trusted_keys = read_flag(args, "--trusted-keys").is_some();
     match policy {
-        protocol::signature_engine::SignaturePolicy::Strict if !has_trusted_keys => anyhow::bail!(
-            "--signature-policy strict requires --trusted-keys <path>"
-        ),
+        protocol::signature_engine::SignaturePolicy::Strict if !has_trusted_keys => {
+            anyhow::bail!("--signature-policy strict requires --trusted-keys <path>")
+        }
         _ => {}
     }
 
@@ -98,6 +98,86 @@ pub fn get_resource_download_preflight_plan_text(
     );
 
     Ok(plan.to_text())
+}
+
+/// Return the preflight plan as JSON string (deterministic ordering via plan serialization).
+pub fn get_resource_download_preflight_plan_json(
+    path: &str,
+    args: &[String],
+    policy: &protocol::signature_engine::SignaturePolicy,
+) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read announcement file: {path}"))?;
+    let announcement: ResourceAnnouncement =
+        serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
+
+    // Simple flag parser for tests/CLI-like calls
+    fn read_flag(args: &[String], name: &str) -> Option<String> {
+        args.windows(2)
+            .find(|window| window[0] == name)
+            .map(|window| window[1].clone())
+    }
+
+    // Enforce signature policy CLI semantics: strict requires trusted keys path
+    let has_trusted_keys = read_flag(args, "--trusted-keys").is_some();
+    match policy {
+        protocol::signature_engine::SignaturePolicy::Strict if !has_trusted_keys => {
+            anyhow::bail!("--signature-policy strict requires --trusted-keys <path>")
+        }
+        _ => {}
+    }
+
+    // Build availability report: inspect provided --resource-cache if present
+    let mut avail_entries: Vec<ResourceAvailabilityEntry> = Vec::new();
+    let resource_cache = read_flag(args, "--resource-cache");
+    for resource in &announcement.resources {
+        if let Some(cache_dir) = resource_cache.as_deref() {
+            let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
+            let resource_dir = workspace_root.join(format!("examples/resources/{}", resource.name));
+            let report = verify_cache_for_resource(&resource_dir, cache_dir)?;
+            for entry in report.entries {
+                avail_entries.push(ResourceAvailabilityEntry {
+                    resource_name: resource.name.clone(),
+                    file_path: entry.relative_path.to_string_lossy().into_owned(),
+                    status: map_cache_status(entry.status),
+                });
+            }
+        } else {
+            for file in &resource.files {
+                avail_entries.push(ResourceAvailabilityEntry {
+                    resource_name: resource.name.clone(),
+                    file_path: file.relative_path.clone(),
+                    status: ResourceAvailabilityStatus::Missing,
+                });
+            }
+        }
+    }
+
+    let is_fully_available = avail_entries
+        .iter()
+        .all(|entry| entry.status == ResourceAvailabilityStatus::Available);
+    let availability_report = ResourceAvailabilityReport {
+        resources: avail_entries,
+        is_fully_available,
+    };
+
+    let signature_report = check_announcement_signature_stub(&announcement);
+
+    let policy_eval = evaluate_resource_policy(&announcement, &availability_report);
+
+    let plan = protocol::build_resource_download_preflight_plan(
+        &announcement,
+        &availability_report,
+        &signature_report,
+        policy,
+        Some(&policy_eval),
+    );
+
+    Ok(serde_json::to_string_pretty(&plan)?)
 }
 
 fn map_cache_status(status: CacheFileStatus) -> ResourceAvailabilityStatus {
@@ -164,7 +244,9 @@ impl fmt::Display for HeartbeatMetrics {
 }
 
 fn optional_sequence_text(value: Option<u64>) -> String {
-    value.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string())
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Start a periodic heartbeat loop that sends pings at `interval` and waits for
@@ -188,7 +270,7 @@ pub async fn heartbeat_loop(
                 metrics.last_ping_sequence = Some(sequence);
                 let mut wguard = writer.lock().await;
                 let mut lguard = lines.lock().await;
-                let res = crate::heartbeat::send_ping_and_wait_with_timeout(&mut *wguard, &mut *lguard, sequence, timeout).await;
+                let res = crate::heartbeat::send_ping_and_wait_with_timeout(&mut wguard, &mut lguard, sequence, timeout).await;
                 match res {
                     Ok(()) => {
                         metrics.pong_count = metrics.pong_count.saturating_add(1);
@@ -240,20 +322,20 @@ pub async fn perform_ping_once(
         let _ = decode_server_line(&line)?;
     }
 
-    crate::heartbeat::send_ping_and_wait_with_timeout(writer, reader_lines, sequence, timeout).await?;
+    crate::heartbeat::send_ping_and_wait_with_timeout(writer, reader_lines, sequence, timeout)
+        .await?;
     Ok(())
 }
 
 /// Reply to a server-initiated ServerPing by sending ClientMessage::ServerPong
 /// with the same sequence number. This is the client's half of the authoritative
 /// liveness path added in M4.16/M4.17.
-pub async fn handle_server_ping(
-    writer: &mut OwnedWriteHalf,
-    sequence: u64,
-) -> anyhow::Result<()> {
+pub async fn handle_server_ping(writer: &mut OwnedWriteHalf, sequence: u64) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt as _;
     writer
-        .write_all(protocol::encode_line(&protocol::ClientMessage::ServerPong { sequence })?.as_bytes())
+        .write_all(
+            protocol::encode_line(&protocol::ClientMessage::ServerPong { sequence })?.as_bytes(),
+        )
         .await?;
     Ok(())
 }

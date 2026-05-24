@@ -73,9 +73,13 @@ impl SessionEventLog {
     }
 
     pub fn count_kind(&self, kind: SessionEventKind) -> usize {
-        self.events.iter().filter(|event| event.kind == kind).count()
+        self.events
+            .iter()
+            .filter(|event| event.kind == kind)
+            .count()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
@@ -184,9 +188,21 @@ mod tests {
     #[test]
     fn count_kind_counts_matching_events() {
         let mut log = SessionEventLog::new();
-        log.record(SessionEventKind::PingReceived, SessionState::Connected, "ping-1");
-        log.record(SessionEventKind::PongSent, SessionState::Connected, "pong-1");
-        log.record(SessionEventKind::PingReceived, SessionState::Connected, "ping-2");
+        log.record(
+            SessionEventKind::PingReceived,
+            SessionState::Connected,
+            "ping-1",
+        );
+        log.record(
+            SessionEventKind::PongSent,
+            SessionState::Connected,
+            "pong-1",
+        );
+        log.record(
+            SessionEventKind::PingReceived,
+            SessionState::Connected,
+            "ping-2",
+        );
         assert_eq!(log.count_kind(SessionEventKind::PingReceived), 2);
         assert_eq!(log.count_kind(SessionEventKind::PongSent), 1);
     }

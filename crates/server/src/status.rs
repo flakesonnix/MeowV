@@ -1,7 +1,7 @@
 use crate::enforcement::SessionEnforcementPolicy;
 use crate::heartbeat_planner::HeartbeatPolicy;
-use protocol::signature_engine::SignaturePolicy;
 use protocol::PROTOCOL_VERSION;
+use protocol::signature_engine::SignaturePolicy;
 
 use crate::config::{JoinGateConfigMode, ServerConfig};
 
@@ -92,7 +92,7 @@ impl ServerRuntimeStatus {
     /// Deterministic human-readable text dump. No timestamps. No client IPs.
     pub fn to_text(&self) -> String {
         format!(
-             "server_name: {}\n\
+            "server_name: {}\n\
               bind_addr: {}\n\
               protocol_version: {}\n\
               exact_version_required: {}\n\

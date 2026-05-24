@@ -377,7 +377,10 @@ mod tests {
     // ── ServerHeartbeatDecision unit tests ───────────────────────────────────
 
     fn srv_input(pings_sent: u64, pongs_received: u64) -> ServerHeartbeatPlannerInput {
-        ServerHeartbeatPlannerInput { pings_sent, pongs_received }
+        ServerHeartbeatPlannerInput {
+            pings_sent,
+            pongs_received,
+        }
     }
 
     #[test]
@@ -447,7 +450,6 @@ mod tests {
 
     #[test]
     fn srv_at_threshold_with_some_pong_under_strict_returns_would_disconnect() {
-        let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD;
         // missed = 5 - 2 = 3 >= threshold
         assert_eq!(
             evaluate_server_heartbeat(&srv_input(5, 2), &HeartbeatPolicy::Strict),
@@ -458,10 +460,7 @@ mod tests {
     #[test]
     fn srv_above_threshold_under_strict_returns_would_disconnect() {
         assert_eq!(
-            evaluate_server_heartbeat(
-                &srv_input(10, 4),
-                &HeartbeatPolicy::Strict
-            ),
+            evaluate_server_heartbeat(&srv_input(10, 4), &HeartbeatPolicy::Strict),
             ServerHeartbeatDecision::WouldDisconnect
         );
     }
@@ -497,7 +496,10 @@ mod tests {
 
     #[test]
     fn srv_to_short_label_no_activity() {
-        assert_eq!(ServerHeartbeatDecision::NoActivity.to_short_label(), "no_activity");
+        assert_eq!(
+            ServerHeartbeatDecision::NoActivity.to_short_label(),
+            "no_activity"
+        );
     }
 
     #[test]
@@ -507,22 +509,34 @@ mod tests {
 
     #[test]
     fn srv_to_short_label_awaiting_pong() {
-        assert_eq!(ServerHeartbeatDecision::AwaitingPong.to_short_label(), "awaiting_pong");
+        assert_eq!(
+            ServerHeartbeatDecision::AwaitingPong.to_short_label(),
+            "awaiting_pong"
+        );
     }
 
     #[test]
     fn srv_to_short_label_missed_pong() {
-        assert_eq!(ServerHeartbeatDecision::MissedPong.to_short_label(), "missed_pong");
+        assert_eq!(
+            ServerHeartbeatDecision::MissedPong.to_short_label(),
+            "missed_pong"
+        );
     }
 
     #[test]
     fn srv_to_short_label_would_disconnect() {
-        assert_eq!(ServerHeartbeatDecision::WouldDisconnect.to_short_label(), "would_disconnect");
+        assert_eq!(
+            ServerHeartbeatDecision::WouldDisconnect.to_short_label(),
+            "would_disconnect"
+        );
     }
 
     #[test]
     fn to_short_label_no_heartbeat_observed() {
-        assert_eq!(HeartbeatDecision::NoHeartbeatObserved.to_short_label(), "no_activity");
+        assert_eq!(
+            HeartbeatDecision::NoHeartbeatObserved.to_short_label(),
+            "no_activity"
+        );
     }
 
     #[test]
@@ -532,17 +546,26 @@ mod tests {
 
     #[test]
     fn to_short_label_no_pong_yet() {
-        assert_eq!(HeartbeatDecision::WouldWarnNoPongYet.to_short_label(), "no_pong_yet");
+        assert_eq!(
+            HeartbeatDecision::WouldWarnNoPongYet.to_short_label(),
+            "no_pong_yet"
+        );
     }
 
     #[test]
     fn to_short_label_warn_timeout() {
-        assert_eq!(HeartbeatDecision::WouldWarnTimeout.to_short_label(), "warn_timeout");
+        assert_eq!(
+            HeartbeatDecision::WouldWarnTimeout.to_short_label(),
+            "warn_timeout"
+        );
     }
 
     #[test]
     fn to_short_label_unhealthy() {
-        assert_eq!(HeartbeatDecision::WouldMarkUnhealthy.to_short_label(), "unhealthy");
+        assert_eq!(
+            HeartbeatDecision::WouldMarkUnhealthy.to_short_label(),
+            "unhealthy"
+        );
     }
 
     #[test]

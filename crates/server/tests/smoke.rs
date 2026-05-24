@@ -45,8 +45,11 @@ fn runtime_status_from_config_and_empty_registry() {
     let config = server::ServerConfig::default();
     let reg = server::SessionRegistry::new();
     let snap = reg.snapshot();
-    let status = server::ServerRuntimeStatus::from_config(&config)
-        .with_session_counts(snap.connected_sessions, snap.ready_dry_run_sessions, snap.failed_sessions);
+    let status = server::ServerRuntimeStatus::from_config(&config).with_session_counts(
+        snap.connected_sessions,
+        snap.ready_dry_run_sessions,
+        snap.failed_sessions,
+    );
     assert_eq!(status.connected_sessions, 0);
     assert_eq!(status.ready_dry_run_sessions, 0);
     assert_eq!(status.failed_sessions, 0);
@@ -61,11 +64,7 @@ fn shutdown_summary_from_default_lifecycle() {
     let config = server::ServerConfig::default();
     let reg = server::SessionRegistry::new();
     let snap = reg.snapshot();
-    let summary = server::build_shutdown_summary(
-        &config,
-        &snap,
-        server::ShutdownReason::AdminQuit,
-    );
+    let summary = server::build_shutdown_summary(&config, &snap, server::ShutdownReason::AdminQuit);
     assert_eq!(summary.reason, server::ShutdownReason::AdminQuit);
     assert!(summary.status_dump.contains("server_name:"));
     assert!(summary.status_dump.contains("exact_version_required: true"));

@@ -1,21 +1,33 @@
 use anyhow::Result;
-use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, net::{TcpListener, TcpStream}, time::Duration};
-use protocol::{ClientMessage, ServerMessage, PROTOCOL_VERSION, decode_server_line, encode_line};
-use server::{run_with_listener_and_state, ServerConfig, ServerSection, SharedState};
 use client::heartbeat;
+use protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage, decode_server_line, encode_line};
+use server::{ServerConfig, ServerSection, SharedState, run_with_listener_and_state};
 use std::sync::Arc;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    time::Duration,
+};
 
 fn server_config(addr: &str) -> ServerConfig {
     ServerConfig {
-        server: ServerSection { bind_addr: addr.to_string(), tick_rate: 20, motd: "heartbeat test".to_string(), ..ServerSection::default() },
+        server: ServerSection {
+            bind_addr: addr.to_string(),
+            tick_rate: 20,
+            motd: "heartbeat test".to_string(),
+            ..ServerSection::default()
+        },
         ..ServerConfig::default()
     }
 }
 
 async fn read_packet<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> Result<ServerMessage>
-where R: tokio::io::AsyncRead + Unpin,
+where
+    R: tokio::io::AsyncRead + Unpin,
 {
-    let line = tokio::time::timeout(Duration::from_secs(2), lines.next_line()).await??.expect("stream closed");
+    let line = tokio::time::timeout(Duration::from_secs(2), lines.next_line())
+        .await??
+        .expect("stream closed");
     Ok(decode_server_line(&line)?)
 }
 
@@ -33,7 +45,16 @@ async fn helper_sends_ping_and_receives_matching_pong() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            encode_line(&ClientMessage::Login {
+                name: "alice".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // consume welcome and announcement
     let _ = read_packet(&mut lines).await?;
@@ -62,7 +83,16 @@ async fn helper_ignores_unrelated_server_messages() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            encode_line(&ClientMessage::Login {
+                name: "alice".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // consume welcome and announcement
     let _ = read_packet(&mut lines).await?;
@@ -93,7 +123,16 @@ async fn helper_ignores_mismatched_pong() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "alice".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            encode_line(&ClientMessage::Login {
+                name: "alice".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // consume welcome and announcement
     let _ = read_packet(&mut lines).await?;
@@ -125,8 +164,19 @@ async fn helper_times_out_when_matching_pong_never_arrives() -> Result<()> {
             // Read login from client
             if let Ok(Some(_line)) = reader.next_line().await {
                 // send Welcome and ResourceAnnouncement
-                let welcome = encode_line(&ServerMessage::Welcome { client_id: uuid::Uuid::new_v4(), motd: "no-pong".to_string(), protocol_version: PROTOCOL_VERSION }).unwrap();
-                let announcement = encode_line(&ServerMessage::ResourceAnnouncement(protocol::ResourceAnnouncement { resources: vec![], signature: None })).unwrap();
+                let welcome = encode_line(&ServerMessage::Welcome {
+                    client_id: uuid::Uuid::new_v4(),
+                    motd: "no-pong".to_string(),
+                    protocol_version: PROTOCOL_VERSION,
+                })
+                .unwrap();
+                let announcement = encode_line(&ServerMessage::ResourceAnnouncement(
+                    protocol::ResourceAnnouncement {
+                        resources: vec![],
+                        signature: None,
+                    },
+                ))
+                .unwrap();
                 let _ = w.write_all(welcome.as_bytes()).await;
                 let _ = w.write_all(announcement.as_bytes()).await;
             }
@@ -142,15 +192,33 @@ async fn helper_times_out_when_matching_pong_never_arrives() -> Result<()> {
     let mut lines = BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "bob".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            encode_line(&ClientMessage::Login {
+                name: "bob".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // consume welcome and announcement
     let _ = read_packet(&mut lines).await?;
     let _ = read_packet(&mut lines).await?;
 
     // Use the timeout-enabled helper with a short timeout (50ms) to avoid waiting a long time in tests.
-    let res = crate::heartbeat::send_ping_and_wait_with_timeout(&mut writer_half, &mut lines, 99, Duration::from_millis(50)).await;
-    assert!(res.is_err(), "expected timeout error when Pong never arrives");
+    let res = crate::heartbeat::send_ping_and_wait_with_timeout(
+        &mut writer_half,
+        &mut lines,
+        99,
+        Duration::from_millis(50),
+    )
+    .await;
+    assert!(
+        res.is_err(),
+        "expected timeout error when Pong never arrives"
+    );
 
     drop(lines);
     drop(writer_half);

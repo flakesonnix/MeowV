@@ -1,14 +1,19 @@
 use anyhow::Result;
-use tokio::{net::TcpListener, time::sleep};
+use protocol::PROTOCOL_VERSION;
+use server::{ServerConfig, ServerSection, SharedState, run_with_listener_and_state};
+use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
-use protocol::{PROTOCOL_VERSION};
-use std::sync::Arc;
-use server::{run_with_listener_and_state, ServerConfig, ServerSection, SharedState};
+use tokio::{net::TcpListener, time::sleep};
 
 fn server_config(addr: &str) -> ServerConfig {
     ServerConfig {
-        server: ServerSection { bind_addr: addr.to_string(), tick_rate: 20, motd: "heartbeat loop test".to_string(), ..ServerSection::default() },
+        server: ServerSection {
+            bind_addr: addr.to_string(),
+            tick_rate: 20,
+            motd: "heartbeat loop test".to_string(),
+            ..ServerSection::default()
+        },
         ..ServerConfig::default()
     }
 }
@@ -27,7 +32,16 @@ async fn heartbeat_loop_sends_multiple_pings() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-test".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            protocol::encode_line(&protocol::ClientMessage::Login {
+                name: "hb-test".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // consume welcome and announcement
     let _ = lines.next_line().await?;
@@ -40,7 +54,15 @@ async fn heartbeat_loop_sends_multiple_pings() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
+        client::heartbeat_loop(
+            hb_writer,
+            hb_lines,
+            tokio::time::Duration::from_millis(50),
+            tokio::time::Duration::from_millis(20),
+            stop_rx,
+            client::ClientHeartbeatPolicy::ReportOnly,
+        )
+        .await
     });
 
     // Let a few heartbeats run
@@ -59,7 +81,6 @@ async fn heartbeat_loop_sends_multiple_pings() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn heartbeat_loop_stops_when_stop_signal_received() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -74,7 +95,16 @@ async fn heartbeat_loop_stops_when_stop_signal_received() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-stop-test".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            protocol::encode_line(&protocol::ClientMessage::Login {
+                name: "hb-stop-test".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // consume welcome and announcement
     let _ = lines.next_line().await?;
@@ -87,7 +117,15 @@ async fn heartbeat_loop_stops_when_stop_signal_received() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
+        client::heartbeat_loop(
+            hb_writer,
+            hb_lines,
+            tokio::time::Duration::from_millis(50),
+            tokio::time::Duration::from_millis(20),
+            stop_rx,
+            client::ClientHeartbeatPolicy::ReportOnly,
+        )
+        .await
     });
 
     // let it run briefly
@@ -102,7 +140,6 @@ async fn heartbeat_loop_stops_when_stop_signal_received() -> Result<()> {
     server_task.abort();
     Ok(())
 }
-
 
 #[tokio::test]
 async fn heartbeat_shutdown_does_not_require_stdin_eof() -> Result<()> {
@@ -121,7 +158,16 @@ async fn heartbeat_shutdown_does_not_require_stdin_eof() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // Login
-    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "hb-no-stdin".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            protocol::encode_line(&protocol::ClientMessage::Login {
+                name: "hb-no-stdin".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // consume welcome and announcement
     let _ = lines.next_line().await?;
@@ -134,7 +180,15 @@ async fn heartbeat_shutdown_does_not_require_stdin_eof() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
+        client::heartbeat_loop(
+            hb_writer,
+            hb_lines,
+            tokio::time::Duration::from_millis(50),
+            tokio::time::Duration::from_millis(20),
+            stop_rx,
+            client::ClientHeartbeatPolicy::ReportOnly,
+        )
+        .await
     });
 
     // stop immediately without touching stdin

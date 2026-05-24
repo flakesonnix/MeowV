@@ -5,7 +5,7 @@ use crate::heartbeat_planner::{
     evaluate_server_heartbeat,
 };
 use crate::session::SessionState;
-use protocol::{CapabilityNegotiationDecision, CapabilityNegotiationReport, LoginCapabilities};
+use protocol::{CapabilityNegotiationReport, LoginCapabilities};
 
 /// Opaque session identifier. Monotonic u64; never based on IP or personal data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -73,7 +73,10 @@ impl SessionRegistrySnapshot {
                     "login_caps=req:{} opt:{} flags:{}",
                     caps.required.len(),
                     caps.optional.len(),
-                    caps.feature_flags.as_ref().map(|flags| flags.len()).unwrap_or(0)
+                    caps.feature_flags
+                        .as_ref()
+                        .map(|flags| flags.len())
+                        .unwrap_or(0)
                 ),
                 None => "login_caps=unknown".to_string(),
             };
@@ -91,14 +94,13 @@ impl SessionRegistrySnapshot {
                 pong_received: entry.pong_sent_count as u64,
                 timeout_or_error: 0,
             };
-            let hb_label = evaluate_heartbeat(&hb_input, &self.heartbeat_policy)
-                .to_short_label();
+            let hb_label = evaluate_heartbeat(&hb_input, &self.heartbeat_policy).to_short_label();
             let srv_hb_input = ServerHeartbeatPlannerInput {
                 pings_sent: entry.server_ping_sent_count as u64,
                 pongs_received: entry.server_pong_received_count as u64,
             };
-            let srv_hb_label = evaluate_server_heartbeat(&srv_hb_input, &self.heartbeat_policy)
-                .to_short_label();
+            let srv_hb_label =
+                evaluate_server_heartbeat(&srv_hb_input, &self.heartbeat_policy).to_short_label();
             lines.push(format!(
                 "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  {}  {}  ping_rx={}  pong_tx={}  srv_ping_tx={}  srv_pong_rx={}  heartbeat={}  srv_heartbeat={}",
                 entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed, proto,
@@ -119,6 +121,12 @@ pub struct SessionRegistry {
     next_id: u64,
     entries: BTreeMap<SessionId, SessionRegistryEntry>,
     heartbeat_policy: HeartbeatPolicy,
+}
+
+impl Default for SessionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionRegistry {
@@ -617,7 +625,10 @@ mod tests {
         let id = reg.create_session();
         reg.update_server_heartbeat_counts(&id, 3, 0);
         let text = reg.snapshot().to_diagnostics_text();
-        assert!(text.contains("srv_heartbeat=would_disconnect"), "text: {text}");
+        assert!(
+            text.contains("srv_heartbeat=would_disconnect"),
+            "text: {text}"
+        );
     }
 
     #[test]
@@ -627,7 +638,10 @@ mod tests {
         let id = reg.create_session();
         reg.update_server_heartbeat_counts(&id, 10, 0);
         let text = reg.snapshot().to_diagnostics_text();
-        assert!(!text.contains("srv_heartbeat=would_disconnect"), "text: {text}");
+        assert!(
+            !text.contains("srv_heartbeat=would_disconnect"),
+            "text: {text}"
+        );
     }
 
     #[test]

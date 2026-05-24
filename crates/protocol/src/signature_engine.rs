@@ -2,8 +2,8 @@ use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 
 use crate::{
-    build_canonical_payload, validate_signature_metadata, ResourceAnnouncement,
-    SignatureMetadataError, SignatureVerificationPlan,
+    ResourceAnnouncement, SignatureMetadataError, SignatureVerificationPlan,
+    build_canonical_payload, validate_signature_metadata,
 };
 
 // ---------------------------------------------------------------------------
@@ -63,8 +63,13 @@ pub struct TrustedPublicKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyConfigError {
     EmptyConfig,
-    DuplicateKeyId { key_id: String },
-    UnsupportedAlgorithm { key_id: String, algorithm: String },
+    DuplicateKeyId {
+        key_id: String,
+    },
+    UnsupportedAlgorithm {
+        key_id: String,
+        algorithm: String,
+    },
     MalformedKeyMaterial {
         key_id: String,
         algorithm: String,
@@ -79,10 +84,7 @@ impl std::fmt::Display for KeyConfigError {
             Self::DuplicateKeyId { key_id } => {
                 write!(f, "duplicate trusted key ID: '{key_id}'")
             }
-            Self::UnsupportedAlgorithm {
-                key_id,
-                algorithm,
-            } => {
+            Self::UnsupportedAlgorithm { key_id, algorithm } => {
                 write!(
                     f,
                     "trusted key '{key_id}' has unsupported algorithm '{algorithm}'"
@@ -159,24 +161,23 @@ impl VerificationReport {
     }
 
     pub fn all_valid(&self) -> bool {
-        self.entries.iter().all(|e| e.outcome == VerificationOutcome::Valid)
+        self.entries
+            .iter()
+            .all(|e| e.outcome == VerificationOutcome::Valid)
     }
 
     pub fn to_text(&self) -> String {
         if self.entries.is_empty() {
             return "signature verification report: (empty, no resources)\n".to_string();
         }
-        let mut lines = format!("signature verification report:\n");
+        let mut lines = "signature verification report:\n".to_string();
         for entry in &self.entries {
             let label = match &entry.outcome {
                 VerificationOutcome::Valid => "valid".to_string(),
                 VerificationOutcome::Invalid { error } => format!("invalid: {error}"),
                 VerificationOutcome::Skipped { reason } => format!("skipped: {reason}"),
             };
-            lines.push_str(&format!(
-                "  [{}] {}\n",
-                label, entry.resource_name
-            ));
+            lines.push_str(&format!("  [{}] {}\n", label, entry.resource_name));
         }
         lines.push_str(&format!(
             "  total: {} resource(s), all valid: {}\n",
@@ -197,11 +198,12 @@ fn verify_ed25519_raw(
     signature_bytes: &[u8],
     public_key_bytes: &[u8],
 ) -> Result<(), VerificationError> {
-    let pk_array: [u8; 32] = public_key_bytes
-        .try_into()
-        .map_err(|_| VerificationError::MalformedKeyMaterial(
-            format!("expected 32-byte Ed25519 public key, got {} bytes", public_key_bytes.len()),
-        ))?;
+    let pk_array: [u8; 32] = public_key_bytes.try_into().map_err(|_| {
+        VerificationError::MalformedKeyMaterial(format!(
+            "expected 32-byte Ed25519 public key, got {} bytes",
+            public_key_bytes.len()
+        ))
+    })?;
 
     let verifying_key = VerifyingKey::from_bytes(&pk_array).map_err(|e| {
         VerificationError::MalformedKeyMaterial(format!("failed to parse public key: {e}"))
@@ -211,9 +213,9 @@ fn verify_ed25519_raw(
         VerificationError::MalformedSignatureBytes(format!("failed to parse signature: {e}"))
     })?;
 
-    verifying_key.verify(payload_bytes, &signature).map_err(|_| {
-        VerificationError::InvalidSignature
-    })
+    verifying_key
+        .verify(payload_bytes, &signature)
+        .map_err(|_| VerificationError::InvalidSignature)
 }
 
 /// Decode a base64 signature string and verify it against canonical payload bytes.
@@ -242,76 +244,76 @@ pub fn verify_ed25519_signature(
 // Plan execution
 // ---------------------------------------------------------------------------
 
-    /// Execute an M3.7 verification plan against actual key material.
-    ///
-    /// All plan entries receive the same announcement-level verification outcome
-    /// (announcement-level signature covers all resources equally).
-    pub fn execute_verification_plan(
-        announcement: &ResourceAnnouncement,
-        plan: &SignatureVerificationPlan,
-        trusted_keys: &[TrustedPublicKey],
-    ) -> VerificationReport {
-        // Determine announcement-level outcome once — independent of plan actions
-        let announcement_outcome = match &announcement.signature {
-            None => VerificationOutcome::Skipped {
-                reason: "announcement has no signature".to_string(),
-            },
-            Some(sig) => match validate_signature_metadata(sig) {
-                Err(err) => {
-                    let error = match err {
-                        SignatureMetadataError::UnsupportedAlgorithm(alg) => {
-                            VerificationError::UnsupportedAlgorithm(alg)
-                        }
-                        _ => VerificationError::MalformedSignatureBytes(err.to_string()),
-                    };
-                    VerificationOutcome::Invalid { error }
-                }
-                Ok(()) => {
-                    // Find matching trusted public key
-                    let trusted = trusted_keys.iter().find(|k| {
-                        k.key_id == sig.key_id && k.algorithm == sig.algorithm
-                    });
-                    match trusted {
-                        None => VerificationOutcome::Invalid {
-                            error: VerificationError::UnknownKeyId(sig.key_id.clone()),
-                        },
-                        Some(key) => {
-                            // Build canonical payload
-                            match build_canonical_payload(announcement) {
-                                None => VerificationOutcome::Invalid {
-                                    error: VerificationError::CanonicalPayloadMissing,
-                                },
-                                Some(payload) => {
-                                    let payload_bytes = serde_json::to_vec(&payload)
-                                        .unwrap_or_default();
-                                    match verify_ed25519_signature(
-                                        &payload_bytes,
-                                        &sig.signature,
-                                        &key.public_key,
-                                    ) {
-                                        Ok(()) => VerificationOutcome::Valid,
-                                        Err(error) => VerificationOutcome::Invalid { error },
-                                    }
+/// Execute an M3.7 verification plan against actual key material.
+///
+/// All plan entries receive the same announcement-level verification outcome
+/// (announcement-level signature covers all resources equally).
+pub fn execute_verification_plan(
+    announcement: &ResourceAnnouncement,
+    plan: &SignatureVerificationPlan,
+    trusted_keys: &[TrustedPublicKey],
+) -> VerificationReport {
+    // Determine announcement-level outcome once — independent of plan actions
+    let announcement_outcome = match &announcement.signature {
+        None => VerificationOutcome::Skipped {
+            reason: "announcement has no signature".to_string(),
+        },
+        Some(sig) => match validate_signature_metadata(sig) {
+            Err(err) => {
+                let error = match err {
+                    SignatureMetadataError::UnsupportedAlgorithm(alg) => {
+                        VerificationError::UnsupportedAlgorithm(alg)
+                    }
+                    _ => VerificationError::MalformedSignatureBytes(err.to_string()),
+                };
+                VerificationOutcome::Invalid { error }
+            }
+            Ok(()) => {
+                // Find matching trusted public key
+                let trusted = trusted_keys
+                    .iter()
+                    .find(|k| k.key_id == sig.key_id && k.algorithm == sig.algorithm);
+                match trusted {
+                    None => VerificationOutcome::Invalid {
+                        error: VerificationError::UnknownKeyId(sig.key_id.clone()),
+                    },
+                    Some(key) => {
+                        // Build canonical payload
+                        match build_canonical_payload(announcement) {
+                            None => VerificationOutcome::Invalid {
+                                error: VerificationError::CanonicalPayloadMissing,
+                            },
+                            Some(payload) => {
+                                let payload_bytes =
+                                    serde_json::to_vec(&payload).unwrap_or_default();
+                                match verify_ed25519_signature(
+                                    &payload_bytes,
+                                    &sig.signature,
+                                    &key.public_key,
+                                ) {
+                                    Ok(()) => VerificationOutcome::Valid,
+                                    Err(error) => VerificationOutcome::Invalid { error },
                                 }
                             }
                         }
                     }
                 }
-            },
-        };
+            }
+        },
+    };
 
-        // Map all plan entries to report entries (same outcome for all)
-        let entries: Vec<VerificationEntry> = plan
-            .entries
-            .iter()
-            .map(|plan_entry| VerificationEntry {
-                resource_name: plan_entry.resource_name.clone(),
-                outcome: announcement_outcome.clone(),
-            })
-            .collect();
+    // Map all plan entries to report entries (same outcome for all)
+    let entries: Vec<VerificationEntry> = plan
+        .entries
+        .iter()
+        .map(|plan_entry| VerificationEntry {
+            resource_name: plan_entry.resource_name.clone(),
+            outcome: announcement_outcome.clone(),
+        })
+        .collect();
 
-        VerificationReport { entries }
-    }
+    VerificationReport { entries }
+}
 
 // ---------------------------------------------------------------------------
 // Signature policy enforcement gate (M4.0)
@@ -367,8 +369,8 @@ pub fn evaluate_signature_policy(
 mod tests {
     use super::*;
     use crate::{
-        build_signature_verification_plan, AnnouncedResource, ResourceAnnouncement,
-        ResourceAnnouncementSignature, ResourceRequirementLevel, TrustedKey, PROTOCOL_VERSION,
+        AnnouncedResource, PROTOCOL_VERSION, ResourceAnnouncement, ResourceAnnouncementSignature,
+        ResourceRequirementLevel, TrustedKey, build_signature_verification_plan,
     };
     use ed25519_dalek::Signer;
 
@@ -797,7 +799,10 @@ mod tests {
         let plan = build_signature_verification_plan(&announcement, &trusted_identity, false);
 
         assert_eq!(plan.entries.len(), 1);
-        assert_eq!(plan.entries[0].action, crate::SignatureVerificationAction::VerifySignature);
+        assert_eq!(
+            plan.entries[0].action,
+            crate::SignatureVerificationAction::VerifySignature
+        );
 
         let trusted_material = vec![TrustedPublicKey {
             key_id: "my-key".to_string(),
@@ -817,7 +822,10 @@ mod tests {
         let announcement = test_announcement(); // no signature
         let plan = build_signature_verification_plan(&announcement, &[], true);
 
-        assert_eq!(plan.entries[0].action, crate::SignatureVerificationAction::WouldRejectUnsigned);
+        assert_eq!(
+            plan.entries[0].action,
+            crate::SignatureVerificationAction::WouldRejectUnsigned
+        );
 
         let report = execute_verification_plan(&announcement, &plan, &[]);
         assert_eq!(report.entries.len(), 1);
@@ -836,7 +844,10 @@ mod tests {
 
         // No trusted identity → plan says UnknownKeyId → engine has no matching TrustedPublicKey
         let plan = build_signature_verification_plan(&announcement, &[], false);
-        assert_eq!(plan.entries[0].action, crate::SignatureVerificationAction::UnknownKeyId);
+        assert_eq!(
+            plan.entries[0].action,
+            crate::SignatureVerificationAction::UnknownKeyId
+        );
 
         let report = execute_verification_plan(&announcement, &plan, &[]);
         assert_eq!(report.entries.len(), 1);
@@ -918,7 +929,12 @@ mod tests {
 
         let result = evaluate_signature_policy(&report, &SignaturePolicy::Strict);
         assert!(result.is_err());
-        assert!(result.unwrap_err().message.contains("signature policy violation"));
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("signature policy violation")
+        );
     }
 
     #[test]

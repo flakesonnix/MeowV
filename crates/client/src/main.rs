@@ -3,6 +3,10 @@ use std::env;
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use game_edition::{GameEdition, GamePlatform};
+use protocol::signature_engine::{
+    SignaturePolicy, TrustedPublicKey, evaluate_signature_policy, execute_verification_plan,
+    validate_trusted_key_config,
+};
 use protocol::{
     AnnouncedResource, ClientMessage, JoinGateDecision, JoinGateMode, JoinGateOutcome,
     LoginCapabilities, PROTOCOL_VERSION, ProtocolCapability, ProtocolCompatibilityProfile,
@@ -10,12 +14,7 @@ use protocol::{
     ResourceAvailabilityReport, ResourceAvailabilityStatus, ServerMessage,
     SignatureVerificationStatus, TrustedKey, build_signature_verification_plan,
     check_announcement_signature_stub, current_login_capabilities, current_protocol_profile,
-    decode_server_line, encode_line, negotiate_protocol_dry_run,
-    evaluate_resource_policy,
-};
-use protocol::signature_engine::{
-    KeyConfigError, SignaturePolicy, TrustedPublicKey, evaluate_signature_policy,
-    execute_verification_plan, validate_trusted_key_config,
+    decode_server_line, encode_line, evaluate_resource_policy, negotiate_protocol_dry_run,
 };
 use resource_manifest::{
     CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind, ResourceManifest,
@@ -26,12 +25,12 @@ use resource_manifest::{
 };
 use serde::Deserialize;
 use server_browser::{LocalJsonServerListSource, ServerListSource, filter_current_protocol};
+use tokio::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 use tracing::info;
-use tokio::time::Duration;
 mod heartbeat;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,8 +43,8 @@ struct TrustedKeyEntry {
 fn load_trusted_keys(path: &str) -> Result<Vec<TrustedPublicKey>> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read trusted keys file: {path}"))?;
-    let entries: Vec<TrustedKeyEntry> = toml::from_str(&raw)
-        .context("failed to parse trusted keys TOML")?;
+    let entries: Vec<TrustedKeyEntry> =
+        toml::from_str(&raw).context("failed to parse trusted keys TOML")?;
     entries
         .into_iter()
         .map(|entry| {
@@ -206,7 +205,17 @@ async fn main() -> Result<()> {
     }
 
     if let Some(path) = read_flag(&args, "--plan-resource-downloads") {
-        return print_resource_download_preflight(&path, &args, &signature_policy);
+        // output options
+        let output_format =
+            read_flag(&args, "--preflight-output").unwrap_or_else(|| "text".to_string());
+        let output_file = read_flag(&args, "--preflight-output-file");
+        return print_resource_download_preflight(
+            &path,
+            &args,
+            &signature_policy,
+            &output_format,
+            output_file.as_deref(),
+        );
     }
 
     let config = ClientConfig::load(&args)?;
@@ -236,7 +245,14 @@ async fn main() -> Result<()> {
             .await?;
 
         // run the minimal ping flow
-        match client::perform_ping_once(&mut writer_half, &mut lines, seq, Duration::from_millis(timeout_ms)).await {
+        match client::perform_ping_once(
+            &mut writer_half,
+            &mut lines,
+            seq,
+            Duration::from_millis(timeout_ms),
+        )
+        .await
+        {
             Ok(()) => {
                 println!("Ping {}: Pong received", seq);
                 return Ok(());
@@ -301,9 +317,8 @@ async fn main() -> Result<()> {
         .transpose()?;
 
     if let Some(ref keys) = trusted_keys {
-        validate_trusted_key_config(keys).map_err(|e| {
-            anyhow::anyhow!("invalid trusted key config: {e}")
-        })?;
+        validate_trusted_key_config(keys)
+            .map_err(|e| anyhow::anyhow!("invalid trusted key config: {e}"))?;
         print_trusted_keys_summary(keys);
     }
 
@@ -338,13 +353,19 @@ async fn main() -> Result<()> {
                     &keys_as_identity(trusted_keys.as_deref().unwrap_or(&[])),
                     false,
                 );
-                let engine_report =
-                    execute_verification_plan(&announcement, &plan, trusted_keys.as_deref().unwrap_or(&[]));
+                let engine_report = execute_verification_plan(
+                    &announcement,
+                    &plan,
+                    trusted_keys.as_deref().unwrap_or(&[]),
+                );
                 print_engine_verification(&announcement, trusted_keys.as_deref());
 
-                if let Err(violation) = evaluate_signature_policy(&engine_report, &signature_policy) {
+                if let Err(violation) = evaluate_signature_policy(&engine_report, &signature_policy)
+                {
                     eprintln!("ERROR: {}", violation.message);
-                    eprintln!("  (strict policy — announcement rejected, no resources will be processed)");
+                    eprintln!(
+                        "  (strict policy — announcement rejected, no resources will be processed)"
+                    );
                     break;
                 }
 
@@ -373,8 +394,12 @@ async fn main() -> Result<()> {
 
     // Periodic heartbeat loop (optional)
     if read_flag_exists(&args, "--heartbeat-enabled") {
-        let interval_ms: u64 = read_flag(&args, "--heartbeat-interval-ms").and_then(|s| s.parse().ok()).unwrap_or(5000);
-        let timeout_ms: u64 = read_flag(&args, "--heartbeat-timeout-ms").and_then(|s| s.parse().ok()).unwrap_or(2000);
+        let interval_ms: u64 = read_flag(&args, "--heartbeat-interval-ms")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5000);
+        let timeout_ms: u64 = read_flag(&args, "--heartbeat-timeout-ms")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2000);
         let heartbeat_policy = parse_heartbeat_policy(&args);
 
         let writer = std::sync::Arc::new(tokio::sync::Mutex::new(writer_half));
@@ -428,8 +453,8 @@ fn print_server_list(path: &str) -> Result<()> {
     let entries = filter_current_protocol(&entries);
 
     println!(
-        "{:<24} {:<21} {:<9} {:<8} {:<10} {}",
-        "NAME", "ADDRESS", "PLAYERS", "PROTO", "EDITION", "TAGS"
+        "{:<24} {:<21} {:<9} {:<8} {:<10} TAGS",
+        "NAME", "ADDRESS", "PLAYERS", "PROTO", "EDITION"
     );
 
     for entry in entries {
@@ -903,22 +928,21 @@ fn print_verify_announcement_signature(
 ) -> Result<()> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read announcement file: {path}"))?;
-    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
-        .context("failed to parse ResourceAnnouncement JSON")?;
+    let announcement: ResourceAnnouncement =
+        serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
 
     let trusted_keys = if let Some(key_path) = read_flag(args, "--trusted-keys") {
         let keys = load_trusted_keys(&key_path)
             .with_context(|| format!("failed to load trusted keys from '{key_path}'"))?;
-        validate_trusted_key_config(&keys).map_err(|e| {
-            anyhow::anyhow!("invalid trusted key config in '{key_path}': {e}")
-        })?;
+        validate_trusted_key_config(&keys)
+            .map_err(|e| anyhow::anyhow!("invalid trusted key config in '{key_path}': {e}"))?;
         print_trusted_keys_summary(&keys);
         keys
     } else {
         match policy {
-            SignaturePolicy::Strict => anyhow::bail!(
-                "--signature-policy strict requires --trusted-keys <path>"
-            ),
+            SignaturePolicy::Strict => {
+                anyhow::bail!("--signature-policy strict requires --trusted-keys <path>")
+            }
             SignaturePolicy::ReportOnly => {
                 eprintln!("info: no trusted keys provided — using empty set");
                 vec![]
@@ -927,9 +951,7 @@ fn print_verify_announcement_signature(
     };
 
     if trusted_keys.is_empty() && *policy == SignaturePolicy::Strict {
-        anyhow::bail!(
-            "--signature-policy strict requires at least one trusted key"
-        );
+        anyhow::bail!("--signature-policy strict requires at least one trusted key");
     }
 
     let reject_unsigned = read_flag_exists(args, "--reject-unsigned");
@@ -962,6 +984,7 @@ fn print_verify_announcement_signature(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn get_resource_download_preflight_plan_text(
     path: &str,
     args: &[String],
@@ -969,20 +992,21 @@ pub(crate) fn get_resource_download_preflight_plan_text(
 ) -> Result<String> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read announcement file: {path}"))?;
-    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
-        .context("failed to parse ResourceAnnouncement JSON")?;
+    let announcement: ResourceAnnouncement =
+        serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
 
     // trusted keys handling: match behavior in other CLI commands
     let _trusted_keys = if let Some(key_path) = read_flag(args, "--trusted-keys") {
         let keys = load_trusted_keys(&key_path)
             .with_context(|| format!("failed to load trusted keys from '{key_path}'"))?;
-        validate_trusted_key_config(&keys).map_err(|e| {
-            anyhow::anyhow!("invalid trusted key config in '{key_path}': {e}")
-        })?;
+        validate_trusted_key_config(&keys)
+            .map_err(|e| anyhow::anyhow!("invalid trusted key config in '{key_path}': {e}"))?;
         keys
     } else {
         match policy {
-            SignaturePolicy::Strict => anyhow::bail!("--signature-policy strict requires --trusted-keys <path>"),
+            SignaturePolicy::Strict => {
+                anyhow::bail!("--signature-policy strict requires --trusted-keys <path>")
+            }
             SignaturePolicy::ReportOnly => vec![],
         }
     };
@@ -1021,9 +1045,24 @@ fn print_resource_download_preflight(
     path: &str,
     args: &[String],
     policy: &SignaturePolicy,
+    output_format: &str,
+    output_file: Option<&str>,
 ) -> Result<()> {
-    let text = get_resource_download_preflight_plan_text(path, args, policy)?;
-    println!("{}", text);
+    match output_format {
+        "json" => {
+            let json = client::get_resource_download_preflight_plan_json(path, args, policy)?;
+            if let Some(file) = output_file {
+                std::fs::write(file, json)?;
+            } else {
+                println!("{}", json);
+            }
+        }
+        _ => {
+            let text = client::get_resource_download_preflight_plan_text(path, args, policy)?;
+            println!("{}", text);
+        }
+    }
+
     println!("No files were downloaded, modified, or executed.");
     Ok(())
 }
