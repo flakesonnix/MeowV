@@ -74,6 +74,7 @@
 | 5.3 | Strict required capability enforcement — explicit capability policy with `report_only` default and `strict` reject-on-would_reject behavior; registry/diagnostics updated; no wire change |
 | 5.4 | Capability enforcement UX / invariants — document operator-visible ReportOnly vs Strict guarantees, clarify capability-vs-protocol rejection boundaries, and add invariant coverage without behavior change |
 | 6.0 | Resource download preflight / safe fetch planning — pure deterministic report-only planner for fetch/replace/block actions; no network, no writes, no execution |
+| 6.5 | Fetch source metadata preflight reporting — validate source schemes, deduplicate, sort; per-entry source_errors and valid_sources in preflight output; report-only, no fetch |
 
 ---
 
@@ -185,6 +186,26 @@ Resource download preflight / safe fetch planning:
 - `client --plan-resource-downloads <announcement.json>`: print deterministic preflight plan (report-only).
 - Supports `--resource-cache` to include local cache availability, `--trusted-keys` + `--signature-policy strict` to evaluate signature gating (strict requires keys).
 - No network I/O, no cache writes, no execution. Deterministic `to_text()` output.
+
+---
+
+## Milestone 6.5
+
+Fetch source metadata preflight reporting:
+
+- `ResourceDownloadPreflightEntry` extended with two new fields:
+  - `source_errors: Vec<String>` — validation errors per source (invalid scheme, path traversal, SHA mismatch, size mismatch, duplicate)
+  - `valid_sources: Vec<ResourceFetchSource>` — sources that passed validation, deterministically sorted
+- Fields use `#[serde(default, skip_serializing_if = "Vec::is_empty")]` — backward-compatible JSON
+- `build_resource_download_preflight_plan(...)` calls `validate_and_order_sources(file)` — pure deterministic validation, no I/O
+- Source metadata reported per preflight entry, including `WouldVerifyAfterFetch` synthetic entries
+- Text output shows:
+  - `source error: <details>` per invalid source
+  - `sources: N validated` per entry (N = count of valid sources)
+- JSON output includes `valid_sources` array and `source_errors` array per entry via serde
+- 6 new protocol unit tests (150 protocol tests total, 508 workspace)
+- No fetch, no network access, no cache writes, no execution, no protocol version change
+- All existing test behavior preserved (sample files have `sources: None` — no source metadata = no source errors, zero validated sources)
 
 ---
 
