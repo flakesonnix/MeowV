@@ -342,6 +342,25 @@ pub fn validate_and_order_sources(
     Ok(normalized)
 }
 
+/// Select the best source from a list of validated, deterministically-sorted sources.
+///
+/// The first source (lowest priority, then id, then uri) is selected as primary;
+/// remaining valid sources become fallbacks. Returns `(None, [])` when the list
+/// is empty.
+///
+/// This is a pure, deterministic, report-only function. No network access,
+/// no cache writes, no execution.
+pub fn select_fetch_source(
+    valid_sources: &[ResourceFetchSource],
+) -> (Option<ResourceFetchSource>, Vec<ResourceFetchSource>) {
+    if valid_sources.is_empty() {
+        return (None, Vec::new());
+    }
+    let selected = valid_sources[0].clone();
+    let fallbacks: Vec<ResourceFetchSource> = valid_sources[1..].to_vec();
+    (Some(selected), fallbacks)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceAvailabilityStatus {
@@ -448,6 +467,14 @@ pub struct ResourceDownloadPreflightEntry {
     /// Empty when no sources are declared or validation fails.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub valid_sources: Vec<ResourceFetchSource>,
+    /// The best candidate source for fetching, selected deterministically
+    /// from valid_sources by lowest priority (then id, then uri).
+    /// `None` when no valid sources exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_source: Option<ResourceFetchSource>,
+    /// Remaining valid sources after the primary selection, in deterministic order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_sources: Vec<ResourceFetchSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -493,6 +520,15 @@ impl ResourceDownloadPreflightPlan {
                 lines.push(format!(
                     "    sources: {} validated",
                     entry.valid_sources.len()
+                ));
+            }
+            if let Some(ref src) = entry.selected_source {
+                lines.push(format!("    selected source: {} {}", src.scheme, src.uri));
+            }
+            if !entry.fallback_sources.is_empty() {
+                lines.push(format!(
+                    "    fallback sources: {}",
+                    entry.fallback_sources.len()
                 ));
             }
         }
@@ -951,6 +987,7 @@ pub fn build_resource_download_preflight_plan(
                 Ok(sources) => (Vec::new(), sources),
                 Err(e) => (vec![e.to_string()], Vec::new()),
             };
+            let (selected_source, fallback_sources) = select_fetch_source(&valid_sources);
 
             let (action, reason) = if unsupported {
                 (
@@ -999,6 +1036,8 @@ pub fn build_resource_download_preflight_plan(
                 reason,
                 source_errors: source_errors.clone(),
                 valid_sources: valid_sources.clone(),
+                selected_source: selected_source.clone(),
+                fallback_sources: fallback_sources.clone(),
             });
 
             if !blocked_by_signature
@@ -1013,6 +1052,8 @@ pub fn build_resource_download_preflight_plan(
                     reason: "downloaded file would require post-fetch verification".to_string(),
                     source_errors: source_errors.clone(),
                     valid_sources: valid_sources.clone(),
+                    selected_source: selected_source.clone(),
+                    fallback_sources: fallback_sources.clone(),
                 });
             }
         }
@@ -2766,6 +2807,444 @@ mod tests {
             serde_json::to_string_pretty(&plan).unwrap(),
             "JSON output is deterministic"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fetch source selection planning tests (M6.6)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn select_fetch_source_lowest_priority_selected() {
+        let mut sources = vec![
+            ResourceFetchSource {
+                id: Some("a".to_string()),
+                scheme: "https".to_string(),
+                uri: "https://a.example.com/f".to_string(),
+                priority: Some(50),
+                ..sample_source()
+            },
+            ResourceFetchSource {
+                id: Some("b".to_string()),
+                scheme: "https".to_string(),
+                uri: "https://b.example.com/f".to_string(),
+                priority: Some(10),
+                ..sample_source()
+            },
+        ];
+        // Simulate deterministic sort from validate_and_order_sources
+        sort_sources(&mut sources);
+        let (selected, fallbacks) = select_fetch_source(&sources);
+        assert!(selected.is_some());
+        assert_eq!(selected.as_ref().unwrap().uri, "https://b.example.com/f");
+        assert_eq!(fallbacks.len(), 1);
+        assert_eq!(fallbacks[0].uri, "https://a.example.com/f");
+    }
+
+    #[test]
+    fn select_fetch_source_tie_break_by_id() {
+        let mut sources = vec![
+            ResourceFetchSource {
+                id: Some("z".to_string()),
+                scheme: "https".to_string(),
+                uri: "https://z.example.com/f".to_string(),
+                priority: Some(10),
+                ..sample_source()
+            },
+            ResourceFetchSource {
+                id: Some("a".to_string()),
+                scheme: "https".to_string(),
+                uri: "https://a.example.com/f".to_string(),
+                priority: Some(10),
+                ..sample_source()
+            },
+        ];
+        sort_sources(&mut sources);
+        let (selected, _) = select_fetch_source(&sources);
+        assert_eq!(
+            selected.as_ref().unwrap().id.as_deref(),
+            Some("a"),
+            "lower id wins tie-break"
+        );
+    }
+
+    #[test]
+    fn select_fetch_source_tie_break_by_uri() {
+        let mut sources = vec![
+            ResourceFetchSource {
+                id: None,
+                scheme: "https".to_string(),
+                uri: "https://z.example.com/f".to_string(),
+                priority: Some(10),
+                ..sample_source()
+            },
+            ResourceFetchSource {
+                id: None,
+                scheme: "https".to_string(),
+                uri: "https://a.example.com/f".to_string(),
+                priority: Some(10),
+                ..sample_source()
+            },
+        ];
+        sort_sources(&mut sources);
+        let (selected, _) = select_fetch_source(&sources);
+        assert_eq!(
+            selected.as_ref().unwrap().uri,
+            "https://a.example.com/f",
+            "lower uri wins final tie-break"
+        );
+    }
+
+    #[test]
+    fn select_fetch_source_empty_returns_none() {
+        let (selected, fallbacks) = select_fetch_source(&[]);
+        assert!(selected.is_none());
+        assert!(fallbacks.is_empty());
+    }
+
+    #[test]
+    fn preflight_selected_source_in_text() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![
+                        ResourceFetchSource {
+                            id: Some("primary".to_string()),
+                            scheme: "https".to_string(),
+                            uri: "https://cdn.example.com/resource.toml".to_string(),
+                            size_bytes: Some(123),
+                            sha256: Some("abc".to_string()),
+                            compression: None,
+                            media_type: None,
+                            priority: Some(10),
+                            mirrors: None,
+                        },
+                        ResourceFetchSource {
+                            id: Some("fallback".to_string()),
+                            scheme: "https".to_string(),
+                            uri: "https://backup.example.com/resource.toml".to_string(),
+                            size_bytes: Some(123),
+                            sha256: Some("abc".to_string()),
+                            compression: None,
+                            media_type: None,
+                            priority: Some(20),
+                            mirrors: None,
+                        },
+                    ]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let text = plan.to_text();
+        assert!(
+            text.contains("selected source:"),
+            "text should show selected source:\n{text}"
+        );
+        assert!(
+            text.contains("https://cdn.example.com/resource.toml"),
+            "text should show primary source URI:\n{text}"
+        );
+        assert!(
+            text.contains("fallback sources: 1"),
+            "text should show fallback count:\n{text}"
+        );
+    }
+
+    #[test]
+    fn preflight_no_selected_source_when_none_valid() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: None,
+                        scheme: "http".to_string(),
+                        uri: "http://insecure.example.com/resource.toml".to_string(),
+                        size_bytes: None,
+                        sha256: None,
+                        compression: None,
+                        media_type: None,
+                        priority: None,
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let text = plan.to_text();
+        assert!(
+            text.contains("source error"),
+            "should show source error for invalid scheme:\n{text}"
+        );
+        assert!(
+            !text.contains("selected source:"),
+            "should NOT show selected source when none valid:\n{text}"
+        );
+        for entry in &plan.entries {
+            assert!(entry.selected_source.is_none());
+            assert!(entry.fallback_sources.is_empty());
+        }
+    }
+
+    #[test]
+    fn preflight_selected_source_no_behavior_change() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: None,
+                        scheme: "https".to_string(),
+                        uri: "https://example.com/resource.toml".to_string(),
+                        size_bytes: None,
+                        sha256: None,
+                        compression: None,
+                        media_type: None,
+                        priority: None,
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        for status in &[
+            ResourceAvailabilityStatus::Available,
+            ResourceAvailabilityStatus::Missing,
+            ResourceAvailabilityStatus::SizeMismatch,
+            ResourceAvailabilityStatus::HashMismatch,
+        ] {
+            let report = sample_report(status.clone());
+            let plan = build_resource_download_preflight_plan(
+                &announcement,
+                &report,
+                &SignatureVerificationReport {
+                    status: SignatureVerificationStatus::Valid,
+                    reason: "signature valid".to_string(),
+                },
+                &signature_engine::SignaturePolicy::ReportOnly,
+                None,
+            );
+            for entry in &plan.entries {
+                // Action/reason unchanged from pre-M6.6
+                match entry.action {
+                    ResourceDownloadPreflightAction::AlreadyAvailable => {
+                        assert_eq!(entry.reason, "resource file already available locally");
+                    }
+                    ResourceDownloadPreflightAction::FetchMissing => {
+                        assert_eq!(entry.reason, "resource file missing from local cache");
+                    }
+                    ResourceDownloadPreflightAction::ReplaceInvalid => {
+                        assert_eq!(entry.reason, "resource file present but invalid locally");
+                    }
+                    ResourceDownloadPreflightAction::WouldVerifyAfterFetch => {
+                        assert_eq!(
+                            entry.reason,
+                            "downloaded file would require post-fetch verification"
+                        );
+                    }
+                    _ => {}
+                }
+                // Selected source should be present since source is valid
+                assert!(
+                    entry.selected_source.is_some(),
+                    "should have selected source for status={:?}",
+                    status
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preflight_selected_source_deterministic_output() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![
+                        ResourceFetchSource {
+                            id: Some("a".to_string()),
+                            scheme: "https".to_string(),
+                            uri: "https://a.example.com/f".to_string(),
+                            size_bytes: Some(123),
+                            sha256: Some("abc".to_string()),
+                            compression: None,
+                            media_type: None,
+                            priority: Some(20),
+                            mirrors: None,
+                        },
+                        ResourceFetchSource {
+                            id: Some("b".to_string()),
+                            scheme: "https".to_string(),
+                            uri: "https://b.example.com/f".to_string(),
+                            size_bytes: Some(123),
+                            sha256: Some("abc".to_string()),
+                            compression: None,
+                            media_type: None,
+                            priority: Some(10),
+                            mirrors: None,
+                        },
+                    ]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        // Running twice gives same output
+        assert_eq!(plan.to_text(), plan.to_text());
+        let json = serde_json::to_string_pretty(&plan).unwrap();
+        assert_eq!(json, serde_json::to_string_pretty(&plan).unwrap());
+        // The lowest-priority source (10) should be selected
+        assert_eq!(
+            plan.entries[0].selected_source.as_ref().unwrap().uri,
+            "https://b.example.com/f",
+            "lowest priority source should be selected"
+        );
+        assert_eq!(plan.entries[0].fallback_sources.len(), 1);
+        assert_eq!(
+            plan.entries[0].fallback_sources[0].uri,
+            "https://a.example.com/f"
+        );
+    }
+
+    #[test]
+    fn preflight_selected_source_json_serialization() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: Some("cdn".to_string()),
+                        scheme: "https".to_string(),
+                        uri: "https://cdn.example.com/resource.toml".to_string(),
+                        size_bytes: Some(123),
+                        sha256: Some("abc".to_string()),
+                        compression: None,
+                        media_type: None,
+                        priority: Some(10),
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let json = serde_json::to_string_pretty(&plan).unwrap();
+        assert!(
+            json.contains("selected_source"),
+            "JSON should include selected_source:\n{json}"
+        );
+        assert!(
+            json.contains("https://cdn.example.com/resource.toml"),
+            "JSON should include selected source URI:\n{json}"
+        );
+        // No fallbacks when only one source
+        assert!(
+            !json.contains("fallback_sources"),
+            "JSON should omit empty fallback_sources:\n{json}"
+        );
+        // Round-trip: deserialize and re-serialize should match
+        let deserialized: ResourceDownloadPreflightPlan = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, plan);
+    }
+
+    fn sort_sources(sources: &mut [ResourceFetchSource]) {
+        sources.sort_by(|a, b| {
+            let pa = a.priority.unwrap_or(100);
+            let pb = b.priority.unwrap_or(100);
+            pa.cmp(&pb)
+                .then(
+                    a.id.clone()
+                        .unwrap_or_default()
+                        .cmp(&b.id.clone().unwrap_or_default()),
+                )
+                .then(a.uri.cmp(&b.uri))
+        });
+    }
+
+    fn sample_source() -> ResourceFetchSource {
+        ResourceFetchSource {
+            id: None,
+            scheme: "https".to_string(),
+            uri: "https://example.com/f".to_string(),
+            size_bytes: None,
+            sha256: None,
+            compression: None,
+            media_type: None,
+            priority: None,
+            mirrors: None,
+        }
     }
 
     fn sample_announcement(requirement_level: ResourceRequirementLevel) -> ResourceAnnouncement {

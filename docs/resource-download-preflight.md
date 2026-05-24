@@ -36,3 +36,13 @@ Source Metadata Reporting (M6.5):
 - Sources are validated per preflight entry, including synthetic `WouldVerifyAfterFetch` entries.
 - All existing output and behavior is unchanged when a resource file has no `sources` field.
 - Report-only: no source URL is ever used for fetching, network access, cache writes, or execution.
+
+Source Selection Planning (M6.6):
+
+- Each preflight entry identifies a `selected_source` (best candidate) and `fallback_sources` (remaining valid sources) from the validated source list.
+- Selection is deterministic: lowest `priority` value wins; tie-break by `id` ascending, then `uri` ascending.
+- When validation errors make all sources invalid, `selected_source` is `None` and `fallback_sources` is empty.
+- Text output shows `selected source: <scheme> <uri>` and `fallback sources: N` per entry.
+- JSON output includes `selected_source` and `fallback_sources` per entry; optional fields are omitted when empty (backward-compatible).
+- Selections are attached per preflight entry, including synthetic `WouldVerifyAfterFetch` entries.
+- Report-only: no source URL is ever used for fetching, network access, cache writes, or execution.
