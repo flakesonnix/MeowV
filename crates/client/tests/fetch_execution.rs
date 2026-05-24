@@ -1,4 +1,6 @@
-use client::fetch::{FetchConfig, FetchFailureReason, FetchOutcome, execute_fetch_plan};
+use client::fetch::{
+    FetchConfig, FetchFailureReason, FetchOutcome, ManifestOutcome, execute_fetch_plan,
+};
 use protocol::{
     AnnouncedResource, AnnouncedResourceFile, PROTOCOL_VERSION, ResourceAnnouncement,
     ResourceDownloadPreflightAction, ResourceDownloadPreflightEntry, ResourceDownloadPreflightPlan,
@@ -632,6 +634,267 @@ fn fetch_commit_report_json() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["outcome"], "committed_to_cache");
     assert_eq!(entries[0]["resource_name"], "json_r2");
+}
+
+// --- Cache manifest integration tests ---
+
+/// Integration test: manifest is created after first commit.
+#[test]
+fn fetch_commit_creates_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("cache");
+    let src_file = dir.path().join("source.dat");
+    let content = b"manifest creation test";
+    std::fs::write(&src_file, content).unwrap();
+    let expected_sha = sha256_hex(content);
+
+    let source = make_source("file", &src_file.to_string_lossy());
+    let preflight_entry = make_preflight_entry(
+        "manifest_r",
+        "m.dat",
+        ResourceDownloadPreflightAction::FetchMissing,
+        source,
+    );
+    let preflight = ResourceDownloadPreflightPlan {
+        entries: vec![preflight_entry],
+    };
+    let announcement = make_single_resource_announcement(
+        "manifest_r",
+        "m.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
+
+    let config = FetchConfig {
+        allow_fetch: true,
+        allow_cache_commit: true,
+        cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+        fetch_report_path: None,
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let report = rt
+        .block_on(execute_fetch_plan(&announcement, &preflight, &config))
+        .unwrap();
+
+    assert_eq!(report.entries.len(), 1);
+    assert_eq!(report.entries[0].outcome, FetchOutcome::CommittedToCache);
+    assert_eq!(report.entries[0].manifest_outcome, ManifestOutcome::Updated);
+
+    // Verify manifest file exists
+    let manifest_path = cache_dir.join("cache_manifest.json");
+    assert!(manifest_path.exists(), "manifest should exist after commit");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["version"], 1);
+    assert_eq!(manifest["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(manifest["entries"][0]["resource_name"], "manifest_r");
+}
+
+/// Integration test: manifest not created when fetch only stages (no commit).
+#[test]
+fn fetch_stage_only_does_not_create_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("cache");
+    let src_file = dir.path().join("source.dat");
+    let content = b"stage only test";
+    std::fs::write(&src_file, content).unwrap();
+    let expected_sha = sha256_hex(content);
+
+    let source = make_source("file", &src_file.to_string_lossy());
+    let preflight_entry = make_preflight_entry(
+        "stage_r",
+        "s.dat",
+        ResourceDownloadPreflightAction::FetchMissing,
+        source,
+    );
+    let preflight = ResourceDownloadPreflightPlan {
+        entries: vec![preflight_entry],
+    };
+    let announcement =
+        make_single_resource_announcement("stage_r", "s.dat", content.len() as u64, &expected_sha);
+
+    let config = FetchConfig {
+        allow_fetch: true,
+        allow_cache_commit: false,
+        cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+        fetch_report_path: None,
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let report = rt
+        .block_on(execute_fetch_plan(&announcement, &preflight, &config))
+        .unwrap();
+
+    assert_eq!(report.entries.len(), 1);
+    assert_eq!(report.entries[0].outcome, FetchOutcome::StagedVerified);
+    assert_eq!(
+        report.entries[0].manifest_outcome,
+        ManifestOutcome::SkippedNoCommit
+    );
+
+    // Manifest should NOT exist
+    let manifest_path = cache_dir.join("cache_manifest.json");
+    assert!(
+        !manifest_path.exists(),
+        "manifest should NOT exist after stage only"
+    );
+}
+
+/// Integration test: manifest report shows in JSON output.
+#[test]
+fn fetch_commit_manifest_in_json_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("cache");
+    let src_file = dir.path().join("source.dat");
+    let content = b"manifest json report";
+    std::fs::write(&src_file, content).unwrap();
+    let expected_sha = sha256_hex(content);
+
+    let source = make_source("file", &src_file.to_string_lossy());
+    let preflight_entry = make_preflight_entry(
+        "json_manifest_r",
+        "jm.dat",
+        ResourceDownloadPreflightAction::FetchMissing,
+        source,
+    );
+    let preflight = ResourceDownloadPreflightPlan {
+        entries: vec![preflight_entry],
+    };
+    let announcement = make_single_resource_announcement(
+        "json_manifest_r",
+        "jm.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
+
+    let config = FetchConfig {
+        allow_fetch: true,
+        allow_cache_commit: true,
+        cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+        fetch_report_path: None,
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let report = rt
+        .block_on(execute_fetch_plan(&announcement, &preflight, &config))
+        .unwrap();
+
+    let json = report.to_json().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let entry = &parsed["entries"][0];
+    assert_eq!(entry["outcome"], "committed_to_cache");
+    assert_eq!(entry["manifest_outcome"], "updated");
+}
+
+/// Integration test: replace invalid also updates manifest.
+#[test]
+fn fetch_replace_invalid_updates_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("cache");
+    let src_file = dir.path().join("source.dat");
+    let content = b"replace invalid manifest test";
+    std::fs::write(&src_file, content).unwrap();
+    let expected_sha = sha256_hex(content);
+
+    // Create stale cache entry
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(cache_dir.join("old.dat"), b"stale").unwrap();
+
+    let source = make_source("file", &src_file.to_string_lossy());
+    let preflight_entry = make_preflight_entry(
+        "rep_manifest_r",
+        "old.dat",
+        ResourceDownloadPreflightAction::ReplaceInvalid,
+        source,
+    );
+    let preflight = ResourceDownloadPreflightPlan {
+        entries: vec![preflight_entry],
+    };
+    let announcement = make_single_resource_announcement(
+        "rep_manifest_r",
+        "old.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
+
+    let config = FetchConfig {
+        allow_fetch: true,
+        allow_cache_commit: true,
+        cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+        fetch_report_path: None,
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let report = rt
+        .block_on(execute_fetch_plan(&announcement, &preflight, &config))
+        .unwrap();
+
+    assert_eq!(report.entries.len(), 1);
+    assert_eq!(
+        report.entries[0].outcome,
+        FetchOutcome::ReplaceInvalidCommitted
+    );
+    assert_eq!(report.entries[0].manifest_outcome, ManifestOutcome::Updated);
+
+    // Manifest should exist with correct entry
+    let manifest_path = cache_dir.join("cache_manifest.json");
+    assert!(manifest_path.exists());
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["entries"][0]["resource_name"], "rep_manifest_r");
+}
+
+/// Integration test: hash mismatch does not create manifest.
+#[test]
+fn fetch_hash_mismatch_does_not_create_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("cache");
+    let src_file = dir.path().join("source.dat");
+    let content = b"hash mismatch no manifest";
+    std::fs::write(&src_file, content).unwrap();
+
+    let source = make_source("file", &src_file.to_string_lossy());
+    let preflight_entry = make_preflight_entry(
+        "bad_r",
+        "bad.dat",
+        ResourceDownloadPreflightAction::FetchMissing,
+        source,
+    );
+    let preflight = ResourceDownloadPreflightPlan {
+        entries: vec![preflight_entry],
+    };
+    let wrong_sha = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
+    let announcement =
+        make_single_resource_announcement("bad_r", "bad.dat", content.len() as u64, &wrong_sha);
+
+    let config = FetchConfig {
+        allow_fetch: true,
+        allow_cache_commit: true,
+        cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+        fetch_report_path: None,
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let report = rt
+        .block_on(execute_fetch_plan(&announcement, &preflight, &config))
+        .unwrap();
+
+    assert_eq!(report.entries.len(), 1);
+    assert!(matches!(
+        report.entries[0].outcome,
+        FetchOutcome::Failure(_)
+    ));
+    assert_eq!(
+        report.entries[0].manifest_outcome,
+        ManifestOutcome::SkippedNoCommit
+    );
+
+    let manifest_path = cache_dir.join("cache_manifest.json");
+    assert!(
+        !manifest_path.exists(),
+        "manifest should not exist after hash mismatch"
+    );
 }
 
 /// Integration test: replace_invalid_committed appears correctly in text report.
