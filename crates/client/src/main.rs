@@ -12,9 +12,10 @@ use protocol::{
     LoginCapabilities, PROTOCOL_VERSION, ProtocolCapability, ProtocolCompatibilityProfile,
     ProtocolVersionRange, ResourceAnnouncement, ResourceAvailabilityEntry,
     ResourceAvailabilityReport, ResourceAvailabilityStatus, ServerMessage,
-    SignatureVerificationStatus, TrustedKey, build_signature_verification_plan,
-    check_announcement_signature_stub, current_login_capabilities, current_protocol_profile,
-    decode_server_line, encode_line, evaluate_resource_policy, negotiate_protocol_dry_run,
+    SignatureVerificationStatus, TrustedKey, build_resource_download_preflight_plan,
+    build_signature_verification_plan, check_announcement_signature_stub,
+    current_login_capabilities, current_protocol_profile, decode_server_line, encode_line,
+    evaluate_resource_policy, negotiate_protocol_dry_run,
 };
 use resource_manifest::{
     CacheFileStatus, CompatibilityStatus, ResourceEntrypointKind, ResourceManifest,
@@ -218,6 +219,9 @@ async fn main() -> Result<()> {
         );
     }
 
+    let allow_fetch = read_flag_exists(&args, "--allow-fetch");
+    let fetch_report_path = read_flag(&args, "--fetch-report");
+
     let config = ClientConfig::load(&args)?;
 
     // Manual ping CLI
@@ -369,14 +373,48 @@ async fn main() -> Result<()> {
                     break;
                 }
 
-                let report =
+                let avail_report =
                     handle_resource_announcement(&announcement, config.resource_cache.as_deref())?;
                 writer_half
                     .write_all(
-                        encode_line(&ClientMessage::ResourceAvailabilityReport(report))?.as_bytes(),
+                        encode_line(&ClientMessage::ResourceAvailabilityReport(
+                            avail_report.clone(),
+                        ))?
+                        .as_bytes(),
                     )
                     .await?;
                 println!("Resource availability report sent.");
+
+                if allow_fetch {
+                    let fetch_config = client::fetch::FetchConfig {
+                        allow_fetch: true,
+                        cache_dir: config.resource_cache.clone(),
+                        fetch_report_path: fetch_report_path.clone(),
+                    };
+                    let signature_stub = check_announcement_signature_stub(&announcement);
+                    let policy_eval = evaluate_resource_policy(&announcement, &avail_report);
+                    let preflight = build_resource_download_preflight_plan(
+                        &announcement,
+                        &avail_report,
+                        &signature_stub,
+                        &signature_policy,
+                        Some(&policy_eval),
+                    );
+                    let fetch_report =
+                        client::fetch::execute_fetch_plan(&announcement, &preflight, &fetch_config)
+                            .await?;
+                    println!("{}", fetch_report.to_text());
+
+                    if let Some(ref report_path) = fetch_report_path {
+                        let json = fetch_report.to_json()?;
+                        std::fs::write(report_path, json).with_context(|| {
+                            format!("failed to write fetch report: {report_path}")
+                        })?;
+                        println!("Fetch report written to: {report_path}");
+                    }
+                } else {
+                    info!("fetch skipped (use --allow-fetch to enable)");
+                }
             }
             ServerMessage::JoinGateDecision(decision) => {
                 print_join_gate_decision(&decision);
