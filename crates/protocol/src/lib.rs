@@ -2031,4 +2031,79 @@ mod tests {
         let plan = build_signature_verification_plan(&announcement, &[], false);
         assert!(plan.is_empty());
     }
+
+    // --- M4.16: server-initiated heartbeat protocol round-trip tests ---
+
+    #[test]
+    fn server_ping_serializes_and_deserializes() {
+        let msg = ServerMessage::ServerPing { sequence: 42 };
+        let line = encode_line(&msg).unwrap();
+        let decoded = decode_server_line(line.trim()).unwrap();
+        match decoded {
+            ServerMessage::ServerPing { sequence } => assert_eq!(sequence, 42),
+            other => panic!("expected ServerPing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn server_pong_client_message_serializes_and_deserializes() {
+        let msg = ClientMessage::ServerPong { sequence: 7 };
+        let line = encode_line(&msg).unwrap();
+        let decoded = decode_client_line(line.trim()).unwrap();
+        match decoded {
+            ClientMessage::ServerPong { sequence } => assert_eq!(sequence, 7),
+            other => panic!("expected ServerPong, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn server_ping_sequence_zero_round_trips() {
+        let msg = ServerMessage::ServerPing { sequence: 0 };
+        let line = encode_line(&msg).unwrap();
+        let decoded = decode_server_line(line.trim()).unwrap();
+        assert!(matches!(decoded, ServerMessage::ServerPing { sequence: 0 }));
+    }
+
+    #[test]
+    fn server_pong_sequence_max_round_trips() {
+        let msg = ClientMessage::ServerPong { sequence: u64::MAX };
+        let line = encode_line(&msg).unwrap();
+        let decoded = decode_client_line(line.trim()).unwrap();
+        assert!(matches!(decoded, ClientMessage::ServerPong { sequence: u64::MAX }));
+    }
+
+    #[test]
+    fn client_ping_round_trip_unchanged_by_m4_16() {
+        let msg = ClientMessage::Ping { sequence: 99 };
+        let line = encode_line(&msg).unwrap();
+        let decoded = decode_client_line(line.trim()).unwrap();
+        assert!(matches!(decoded, ClientMessage::Ping { sequence: 99 }));
+    }
+
+    #[test]
+    fn server_pong_round_trip_unchanged_by_m4_16() {
+        let msg = ServerMessage::Pong { sequence: 55 };
+        let line = encode_line(&msg).unwrap();
+        let decoded = decode_server_line(line.trim()).unwrap();
+        assert!(matches!(decoded, ServerMessage::Pong { sequence: 55 }));
+    }
+
+    #[test]
+    fn server_ping_has_distinct_serde_type_from_client_ping() {
+        let server_ping = encode_line(&ServerMessage::ServerPing { sequence: 1 }).unwrap();
+        let client_ping = encode_line(&ClientMessage::Ping { sequence: 1 }).unwrap();
+        // Wire formats differ by the "type" field
+        assert!(server_ping.contains("server_ping"));
+        assert!(client_ping.contains("\"ping\""));
+        assert!(!server_ping.contains("\"ping\""));
+    }
+
+    #[test]
+    fn server_pong_client_has_distinct_serde_type_from_server_pong() {
+        let client_server_pong = encode_line(&ClientMessage::ServerPong { sequence: 1 }).unwrap();
+        let server_pong = encode_line(&ServerMessage::Pong { sequence: 1 }).unwrap();
+        assert!(client_server_pong.contains("server_pong"));
+        assert!(server_pong.contains("\"pong\""));
+        assert!(!client_server_pong.contains("\"pong\""));
+    }
 }
