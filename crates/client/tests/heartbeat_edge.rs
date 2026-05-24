@@ -61,7 +61,7 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(20), stop_rx).await
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(20), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
     });
 
     // let a few pings happen
@@ -137,7 +137,7 @@ async fn heartbeat_loop_timeout_continues_without_disconnect() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(10), stop_rx).await
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(10), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
     });
 
     // let a few pings happen

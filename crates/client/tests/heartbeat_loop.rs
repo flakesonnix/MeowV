@@ -40,7 +40,7 @@ async fn heartbeat_loop_sends_multiple_pings() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
     });
 
     // Let a few heartbeats run
@@ -87,7 +87,7 @@ async fn heartbeat_loop_stops_when_stop_signal_received() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
     });
 
     // let it run briefly
@@ -134,7 +134,7 @@ async fn heartbeat_shutdown_does_not_require_stdin_eof() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx).await
+        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(50), tokio::time::Duration::from_millis(20), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
     });
 
     // stop immediately without touching stdin
