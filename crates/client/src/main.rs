@@ -388,6 +388,7 @@ async fn main() -> Result<()> {
                 if allow_fetch {
                     let fetch_config = client::fetch::FetchConfig {
                         allow_fetch: true,
+                        allow_cache_commit: false,
                         cache_dir: config.resource_cache.clone(),
                         fetch_report_path: fetch_report_path.clone(),
                     };
