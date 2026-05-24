@@ -190,8 +190,10 @@ pub async fn execute_fetch_plan(
     }
 
     // Determine commit behaviour per-entry from preflight action
-    let mut action_map: std::collections::HashMap<(String, String), protocol::ResourceDownloadPreflightAction> =
-        std::collections::HashMap::new();
+    let mut action_map: std::collections::HashMap<
+        (String, String),
+        protocol::ResourceDownloadPreflightAction,
+    > = std::collections::HashMap::new();
     for pe in &preflight_plan.entries {
         action_map.insert(
             (pe.resource_name.clone(), pe.file_path.clone()),
@@ -262,34 +264,32 @@ pub async fn execute_fetch_plan(
             let staged_file = find_staged_file(&cache_dir, &exec_entry.file_path).await;
 
             match staged_file {
-                Some(staged_path) => {
-                    match commit_verified_file(&staged_path, &target_path).await {
-                        Ok(()) => {
-                            let _ = tokio::fs::remove_file(&staged_path).await;
-                            let is_replace = matches!(
-                                action,
-                                Some(&protocol::ResourceDownloadPreflightAction::ReplaceInvalid)
+                Some(staged_path) => match commit_verified_file(&staged_path, &target_path).await {
+                    Ok(()) => {
+                        let _ = tokio::fs::remove_file(&staged_path).await;
+                        let is_replace = matches!(
+                            action,
+                            Some(&protocol::ResourceDownloadPreflightAction::ReplaceInvalid)
+                        );
+                        if is_replace {
+                            info!(
+                                "replaced invalid cache entry: {}:{}",
+                                exec_entry.resource_name, exec_entry.file_path
                             );
-                            if is_replace {
-                                info!(
-                                    "replaced invalid cache entry: {}:{}",
-                                    exec_entry.resource_name, exec_entry.file_path
-                                );
-                                FetchOutcome::ReplaceInvalidCommitted
-                            } else {
-                                info!(
-                                    "committed to cache: {}:{}",
-                                    exec_entry.resource_name, exec_entry.file_path
-                                );
-                                FetchOutcome::CommittedToCache
-                            }
-                        }
-                        Err(outcome) => {
-                            let _ = tokio::fs::remove_file(&staged_path).await;
-                            outcome
+                            FetchOutcome::ReplaceInvalidCommitted
+                        } else {
+                            info!(
+                                "committed to cache: {}:{}",
+                                exec_entry.resource_name, exec_entry.file_path
+                            );
+                            FetchOutcome::CommittedToCache
                         }
                     }
-                }
+                    Err(outcome) => {
+                        let _ = tokio::fs::remove_file(&staged_path).await;
+                        outcome
+                    }
+                },
                 None => {
                     // Staged file disappeared; treat as failure
                     error!(
@@ -359,18 +359,18 @@ async fn commit_verified_file(
 
     // Sandbox: reject path traversal in target path
     if contains_path_traversal_standalone(target_path) {
-        return Err(FetchOutcome::Failure(FetchFailureReason::PathTraversalRejected));
+        return Err(FetchOutcome::Failure(
+            FetchFailureReason::PathTraversalRejected,
+        ));
     }
 
     // Create parent directories if needed
     if let Some(parent) = target_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| {
-                FetchOutcome::Failure(FetchFailureReason::CommitFailed(format!(
-                    "failed to create parent directory: {e}"
-                )))
-            })?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            FetchOutcome::Failure(FetchFailureReason::CommitFailed(format!(
+                "failed to create parent directory: {e}"
+            )))
+        })?;
     }
 
     // Attempt atomic rename
@@ -384,20 +384,19 @@ async fn commit_verified_file(
                 )))
             })?;
 
-        tokio::fs::remove_file(staged_path)
-            .await
-            .map_err(|e| {
-                FetchOutcome::Failure(FetchFailureReason::CommitFailed(format!(
-                    "cleanup after copy failed: {e}"
-                )))
-            })?;
+        tokio::fs::remove_file(staged_path).await.map_err(|e| {
+            FetchOutcome::Failure(FetchFailureReason::CommitFailed(format!(
+                "cleanup after copy failed: {e}"
+            )))
+        })?;
     }
 
     Ok(())
 }
 
 fn contains_path_traversal_standalone(path: &Path) -> bool {
-    path.components().any(|c| c == std::path::Component::ParentDir)
+    path.components()
+        .any(|c| c == std::path::Component::ParentDir)
 }
 
 #[allow(dead_code)]
@@ -1092,7 +1091,12 @@ mod tests {
         let preflight = protocol::ResourceDownloadPreflightPlan {
             entries: vec![preflight_entry],
         };
-        let announcement = make_single_resource_announcement("test_r", "f.dat", content.len() as u64, &expected_sha256);
+        let announcement = make_single_resource_announcement(
+            "test_r",
+            "f.dat",
+            content.len() as u64,
+            &expected_sha256,
+        );
 
         let config = FetchConfig {
             allow_fetch: true,
@@ -1101,7 +1105,9 @@ mod tests {
             fetch_report_path: None,
         };
 
-        let report = execute_fetch_plan(&announcement, &preflight, &config).await.unwrap();
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].outcome, FetchOutcome::CommittedToCache);
 
@@ -1138,7 +1144,12 @@ mod tests {
         let preflight = protocol::ResourceDownloadPreflightPlan {
             entries: vec![preflight_entry],
         };
-        let announcement = make_single_resource_announcement("test_r", "f.dat", content.len() as u64, &expected_sha256);
+        let announcement = make_single_resource_announcement(
+            "test_r",
+            "f.dat",
+            content.len() as u64,
+            &expected_sha256,
+        );
 
         let config = FetchConfig {
             allow_fetch: true,
@@ -1147,13 +1158,18 @@ mod tests {
             fetch_report_path: None,
         };
 
-        let report = execute_fetch_plan(&announcement, &preflight, &config).await.unwrap();
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].outcome, FetchOutcome::StagedVerified);
 
         // Cache should NOT contain the file
         let cache_file = cache_dir.join("f.dat");
-        assert!(!cache_file.exists(), "file should not be committed without gate");
+        assert!(
+            !cache_file.exists(),
+            "file should not be committed without gate"
+        );
     }
 
     #[tokio::test]
@@ -1175,8 +1191,10 @@ mod tests {
             entries: vec![preflight_entry],
         };
         // Announcement has WRONG sha256
-        let wrong_sha = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
-        let announcement = make_single_resource_announcement("test_r", "f.dat", content.len() as u64, &wrong_sha);
+        let wrong_sha =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        let announcement =
+            make_single_resource_announcement("test_r", "f.dat", content.len() as u64, &wrong_sha);
 
         let config = FetchConfig {
             allow_fetch: true,
@@ -1185,7 +1203,9 @@ mod tests {
             fetch_report_path: None,
         };
 
-        let report = execute_fetch_plan(&announcement, &preflight, &config).await.unwrap();
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
         assert_eq!(report.entries.len(), 1);
         assert_eq!(
             report.entries[0].outcome,
@@ -1194,7 +1214,10 @@ mod tests {
 
         // Cache should NOT contain the file
         let cache_file = cache_dir.join("f.dat");
-        assert!(!cache_file.exists(), "file should not be committed after hash mismatch");
+        assert!(
+            !cache_file.exists(),
+            "file should not be committed after hash mismatch"
+        );
     }
 
     #[tokio::test]
@@ -1237,7 +1260,9 @@ mod tests {
         let result = commit_verified_file(&staged_file, &target).await;
         assert_eq!(
             result,
-            Err(FetchOutcome::Failure(FetchFailureReason::PathTraversalRejected))
+            Err(FetchOutcome::Failure(
+                FetchFailureReason::PathTraversalRejected
+            ))
         );
     }
 
@@ -1264,7 +1289,12 @@ mod tests {
         let preflight = protocol::ResourceDownloadPreflightPlan {
             entries: vec![preflight_entry],
         };
-        let announcement = make_single_resource_announcement("test_r", "f.dat", content.len() as u64, &expected_sha256);
+        let announcement = make_single_resource_announcement(
+            "test_r",
+            "f.dat",
+            content.len() as u64,
+            &expected_sha256,
+        );
 
         let config = FetchConfig {
             allow_fetch: true,
@@ -1273,9 +1303,14 @@ mod tests {
             fetch_report_path: None,
         };
 
-        let report = execute_fetch_plan(&announcement, &preflight, &config).await.unwrap();
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
         assert_eq!(report.entries.len(), 1);
-        assert_eq!(report.entries[0].outcome, FetchOutcome::ReplaceInvalidCommitted);
+        assert_eq!(
+            report.entries[0].outcome,
+            FetchOutcome::ReplaceInvalidCommitted
+        );
 
         // Cache should now have the new content
         let cache_file = cache_dir.join("f.dat");
@@ -1309,7 +1344,10 @@ mod tests {
         );
 
         // Staged file should still exist (commit was attempted but failed)
-        assert!(staged_file.exists(), "staged file should remain after failed commit");
+        assert!(
+            staged_file.exists(),
+            "staged file should remain after failed commit"
+        );
     }
 
     #[test]
@@ -1322,10 +1360,18 @@ mod tests {
 
     #[test]
     fn test_contains_path_traversal_standalone() {
-        assert!(!contains_path_traversal_standalone(Path::new("/tmp/cache/f.dat")));
-        assert!(contains_path_traversal_standalone(Path::new("/tmp/cache/../f.dat")));
-        assert!(contains_path_traversal_standalone(Path::new("f.dat/../../etc/passwd")));
-        assert!(!contains_path_traversal_standalone(Path::new("normal/path/file.dat")));
+        assert!(!contains_path_traversal_standalone(Path::new(
+            "/tmp/cache/f.dat"
+        )));
+        assert!(contains_path_traversal_standalone(Path::new(
+            "/tmp/cache/../f.dat"
+        )));
+        assert!(contains_path_traversal_standalone(Path::new(
+            "f.dat/../../etc/passwd"
+        )));
+        assert!(!contains_path_traversal_standalone(Path::new(
+            "normal/path/file.dat"
+        )));
     }
 
     // --- test helpers ---
@@ -1336,7 +1382,10 @@ mod tests {
         action: protocol::ResourceDownloadPreflightAction,
         source: ResourceFetchSource,
     ) -> protocol::ResourceDownloadPreflightEntry {
-        use protocol::{ResourceDownloadPreflightEntry, ResourceFetchSourcePolicyDecision, ResourceFetchSourcePolicyReport};
+        use protocol::{
+            ResourceDownloadPreflightEntry, ResourceFetchSourcePolicyDecision,
+            ResourceFetchSourcePolicyReport,
+        };
         ResourceDownloadPreflightEntry {
             resource_name: resource_name.to_string(),
             file_path: file_path.to_string(),

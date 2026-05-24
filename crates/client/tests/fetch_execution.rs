@@ -253,12 +253,8 @@ fn fetch_report_to_text_includes_all_entries() {
         entries: vec![preflight_entry],
     };
 
-    let announcement = make_single_resource_announcement(
-        "report_r",
-        "r.dat",
-        content.len() as u64,
-        &expected_sha,
-    );
+    let announcement =
+        make_single_resource_announcement("report_r", "r.dat", content.len() as u64, &expected_sha);
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -300,12 +296,8 @@ fn fetch_report_json_is_valid() {
         entries: vec![preflight_entry],
     };
 
-    let announcement = make_single_resource_announcement(
-        "json_r",
-        "j.dat",
-        content.len() as u64,
-        &expected_sha,
-    );
+    let announcement =
+        make_single_resource_announcement("json_r", "j.dat", content.len() as u64, &expected_sha);
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -431,7 +423,10 @@ fn fetch_replace_invalid_commits_to_cache() {
         .unwrap();
 
     assert_eq!(report.entries.len(), 1);
-    assert_eq!(report.entries[0].outcome, FetchOutcome::ReplaceInvalidCommitted);
+    assert_eq!(
+        report.entries[0].outcome,
+        FetchOutcome::ReplaceInvalidCommitted
+    );
 
     // Cache should now have new content
     let cached = cache_dir.join("stale.dat");
@@ -490,7 +485,10 @@ fn fetch_hash_mismatch_does_not_commit() {
 
     // Cache should NOT have the file
     let cached = cache_dir.join("bad.dat");
-    assert!(!cached.exists(), "file should not exist in cache after hash mismatch");
+    assert!(
+        !cached.exists(),
+        "file should not exist in cache after hash mismatch"
+    );
 }
 
 /// Integration test: committed cache file has correct content and sha256.
