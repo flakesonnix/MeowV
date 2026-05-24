@@ -206,7 +206,10 @@ async fn main() -> Result<()> {
     }
 
     if let Some(path) = read_flag(&args, "--plan-resource-downloads") {
-        return print_resource_download_preflight(&path, &args, &signature_policy);
+        // output options
+        let output_format = read_flag(&args, "--preflight-output").unwrap_or_else(|| "text".to_string());
+        let output_file = read_flag(&args, "--preflight-output-file");
+        return print_resource_download_preflight(&path, &args, &signature_policy, &output_format, output_file.as_deref());
     }
 
     let config = ClientConfig::load(&args)?;
@@ -1021,9 +1024,24 @@ fn print_resource_download_preflight(
     path: &str,
     args: &[String],
     policy: &SignaturePolicy,
+    output_format: &str,
+    output_file: Option<&str>,
 ) -> Result<()> {
-    let text = get_resource_download_preflight_plan_text(path, args, policy)?;
-    println!("{}", text);
+    match output_format {
+        "json" => {
+            let json = client::get_resource_download_preflight_plan_json(path, args, policy)?;
+            if let Some(file) = output_file {
+                std::fs::write(file, json)?;
+            } else {
+                println!("{}", json);
+            }
+        }
+        _ => {
+            let text = client::get_resource_download_preflight_plan_text(path, args, policy)?;
+            println!("{}", text);
+        }
+    }
+
     println!("No files were downloaded, modified, or executed.");
     Ok(())
 }

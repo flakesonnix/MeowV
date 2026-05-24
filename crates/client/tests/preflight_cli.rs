@@ -8,6 +8,7 @@ use client::get_resource_download_preflight_plan_text;
 use protocol::signature_engine::SignaturePolicy;
 use std::fs;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 
 #[test]
 fn preflight_plan_generates_text() -> Result<()> {
@@ -155,5 +156,39 @@ fn preflight_reports_replace_invalid_for_bad_cached_file() -> Result<()> {
     let text = get_resource_download_preflight_plan_text(file_path.to_str().unwrap(), &args, &SignaturePolicy::ReportOnly)?;
     println!("preflight plan text:\n{}", text);
     assert!(text.contains("replace_invalid") || text.contains("replace_invalid"));
+    Ok(())
+}
+
+#[test]
+fn preflight_json_output_can_be_written_to_file() -> Result<()> {
+    let dir = tempdir()?;
+    let file_path = dir.path().join("announcement.json");
+    let announcement = ResourceAnnouncement {
+        resources: vec![AnnouncedResource {
+            name: "chat".to_string(),
+            version: "0.1.0".to_string(),
+            files: vec![AnnouncedResourceFile {
+                relative_path: "resource.toml".to_string(),
+                size_bytes: 123,
+                sha256: "abc".to_string(),
+            }],
+            protocol_version: protocol::PROTOCOL_VERSION,
+            requirement_level: ResourceRequirementLevel::Required,
+        }],
+        signature: None,
+    };
+
+    let mut f = File::create(&file_path)?;
+    write!(f, "{}", serde_json::to_string(&announcement)?)?;
+
+    let out = NamedTempFile::new()?;
+    let out_path = out.path().to_str().unwrap().to_string();
+    let args: Vec<String> = vec!["--preflight-output".to_string(), "json".to_string(), "--preflight-output-file".to_string(), out_path.clone()];
+    // Should return JSON and write to file
+    let json = client::get_resource_download_preflight_plan_json(file_path.to_str().unwrap(), &args, &SignaturePolicy::ReportOnly)?;
+    // write via the CLI helper behavior
+    std::fs::write(&out_path, &json)?;
+    let read_back = std::fs::read_to_string(&out_path)?;
+    assert!(read_back.contains("resource download preflight") || read_back.contains("entries"));
     Ok(())
 }

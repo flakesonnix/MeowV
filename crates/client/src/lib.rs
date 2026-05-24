@@ -100,6 +100,86 @@ pub fn get_resource_download_preflight_plan_text(
     Ok(plan.to_text())
 }
 
+/// Return the preflight plan as JSON string (deterministic ordering via plan serialization).
+pub fn get_resource_download_preflight_plan_json(
+    path: &str,
+    args: &[String],
+    policy: &protocol::signature_engine::SignaturePolicy,
+) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read announcement file: {path}"))?;
+    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
+        .context("failed to parse ResourceAnnouncement JSON")?;
+
+    // Simple flag parser for tests/CLI-like calls
+    fn read_flag(args: &[String], name: &str) -> Option<String> {
+        args.windows(2)
+            .find(|window| window[0] == name)
+            .map(|window| window[1].clone())
+    }
+
+    // Enforce signature policy CLI semantics: strict requires trusted keys path
+    let has_trusted_keys = read_flag(args, "--trusted-keys").is_some();
+    match policy {
+        protocol::signature_engine::SignaturePolicy::Strict if !has_trusted_keys => anyhow::bail!(
+            "--signature-policy strict requires --trusted-keys <path>"
+        ),
+        _ => {}
+    }
+
+    // Build availability report: inspect provided --resource-cache if present
+    let mut avail_entries: Vec<ResourceAvailabilityEntry> = Vec::new();
+    let resource_cache = read_flag(args, "--resource-cache");
+    for resource in &announcement.resources {
+        if let Some(cache_dir) = resource_cache.as_deref() {
+            let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
+            let resource_dir = workspace_root.join(format!("examples/resources/{}", resource.name));
+            let report = verify_cache_for_resource(&resource_dir, cache_dir)?;
+            for entry in report.entries {
+                avail_entries.push(ResourceAvailabilityEntry {
+                    resource_name: resource.name.clone(),
+                    file_path: entry.relative_path.to_string_lossy().into_owned(),
+                    status: map_cache_status(entry.status),
+                });
+            }
+        } else {
+            for file in &resource.files {
+                avail_entries.push(ResourceAvailabilityEntry {
+                    resource_name: resource.name.clone(),
+                    file_path: file.relative_path.clone(),
+                    status: ResourceAvailabilityStatus::Missing,
+                });
+            }
+        }
+    }
+
+    let is_fully_available = avail_entries
+        .iter()
+        .all(|entry| entry.status == ResourceAvailabilityStatus::Available);
+    let availability_report = ResourceAvailabilityReport {
+        resources: avail_entries,
+        is_fully_available,
+    };
+
+    let signature_report = check_announcement_signature_stub(&announcement);
+
+    let policy_eval = evaluate_resource_policy(&announcement, &availability_report);
+
+    let plan = protocol::build_resource_download_preflight_plan(
+        &announcement,
+        &availability_report,
+        &signature_report,
+        policy,
+        Some(&policy_eval),
+    );
+
+    Ok(serde_json::to_string_pretty(&plan)?)
+}
+
 fn map_cache_status(status: CacheFileStatus) -> ResourceAvailabilityStatus {
     match status {
         CacheFileStatus::Valid => ResourceAvailabilityStatus::Available,
