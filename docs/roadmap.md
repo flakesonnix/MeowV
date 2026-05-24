@@ -58,6 +58,26 @@
 | 4.10 | Heartbeat admin observability — surface heartbeat counts in `sessions`/`diagnostics` admin output via registry snapshot; tests; docs |
 | 4.11 | Heartbeat timeout policy planner — `HeartbeatPolicy`, `HeartbeatDecision`, `HeartbeatPlannerInput`; deterministic evaluator; surfaced in `SessionDiagnostics`; report-only by default |
 | 4.12 | Heartbeat policy report in admin/status — `heartbeat=<label>` per-session in `sessions`/`diagnostics` output; `to_short_label()` on `HeartbeatDecision`; tests; docs |
+| 4.13 | Heartbeat policy config plumbing — `[heartbeat]` TOML section; `HeartbeatSection` with `Default → ReportOnly`; policy threaded through registry snapshot, diagnostics, admin output, and `ServerRuntimeStatus`; no enforcement |
+
+---
+
+## Milestone 4.13
+
+Heartbeat policy config plumbing:
+
+- `HeartbeatPolicy` gains `#[derive(Deserialize)]` + `#[serde(rename_all = "snake_case")]`
+- `HeartbeatSection { policy: HeartbeatPolicy }` added to `config.rs`; defaults to `ReportOnly`
+- `ServerConfig` has `pub heartbeat: HeartbeatSection`
+- `to_lifecycle_summary_text()` includes `heartbeat_policy:` line
+- `SessionRegistry` and `SessionRegistrySnapshot` carry `heartbeat_policy: HeartbeatPolicy`
+- `set_heartbeat_policy()` on `SessionRegistry`; called once at startup from `run_with_listener_and_state()`
+- `to_diagnostics_text()` evaluates `heartbeat=<label>` under configured policy (not hardcoded `ReportOnly`)
+- All `.with_heartbeat_policy()` calls in `lib.rs` use `&config.heartbeat.policy`
+- `ServerRuntimeStatus` has `heartbeat_policy: String`; surfaced in `to_text()` and admin `status`
+- 7 config tests, 5 registry policy tests, 2 admin policy tests, 3 status tests
+- `example.server.toml` gains `[heartbeat]` section with comments
+- No disconnect enforcement, no protocol changes
 
 ---
 

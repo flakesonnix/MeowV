@@ -1,14 +1,15 @@
-# Server Policy Configuration (Milestone 4.3)
+# Server Policy Configuration (Milestones 4.3, 4.13)
 
 ## Overview
 
-The server has two configurable policy sections that control how
+The server has three configurable policy sections that control how
 enforcement decisions are applied:
 
 | Section | Field | Values | Default |
 |---------|-------|--------|---------|
 | `[enforcement]` | `mode` | `"report_only"`, `"strict"` | `"report_only"` |
 | `[signature]` | `policy` | `"report_only"`, `"strict"` | `"report_only"` |
+| `[heartbeat]` | `policy` | `"report_only"`, `"strict"` | `"report_only"` |
 
 ## Session Enforcement Policy (`[enforcement]`)
 
@@ -32,6 +33,21 @@ is currently client-side only.
 | `"report_only"` | Signature verification status is reported but never causes rejection. |
 | `"strict"` | Unsigned or invalid signature verification causes the resource announcement to be rejected. |
 
+## Heartbeat Policy (`[heartbeat]`)
+
+Controls how the heartbeat planner decision is evaluated per session.
+
+| Mode | Behavior |
+|------|----------|
+| `"report_only"` | Heartbeat decisions are evaluated and surfaced in diagnostics/admin output. No disconnect occurs regardless of miss count. |
+| `"strict"` | Heartbeat decisions are evaluated under strict thresholds. `WouldDisconnectMissedHeartbeat` is logged when `timeout_or_error >= 3`. No actual disconnect occurs in the current milestone — this is planning only. |
+
+The policy is set at startup via `set_heartbeat_policy()` on the session registry.
+All per-session `heartbeat=<label>` values in admin `sessions` and `diagnostics`
+output reflect the configured policy.
+
+See `docs/client-heartbeat.md` for planner decisions and label descriptions.
+
 ## Example Config
 
 ### ReportOnly (default, safe)
@@ -41,6 +57,9 @@ is currently client-side only.
 mode = "report_only"
 
 [signature]
+policy = "report_only"
+
+[heartbeat]
 policy = "report_only"
 ```
 
@@ -52,6 +71,9 @@ mode = "strict"
 
 [signature]
 policy = "report_only"
+
+[heartbeat]
+policy = "report_only"
 ```
 
 ### Strict Everything
@@ -61,6 +83,9 @@ policy = "report_only"
 mode = "strict"
 
 [signature]
+policy = "strict"
+
+[heartbeat]
 policy = "strict"
 ```
 
@@ -82,7 +107,7 @@ Policies are visible in:
   `session_enforcement: report_only` / `strict` and
   `signature_policy: report_only` / `strict`
 - **Admin status command**: `ServerRuntimeStatus::to_text()` includes
-  `session_enforcement` and `signature_policy` fields
+  `session_enforcement`, `signature_policy`, and `heartbeat_policy` fields
 - **Session diagnostics**: When the session fails and `print_session_diagnostics`
   is enabled, the diagnostic output includes the active enforcement policy
   and the decision that was evaluated

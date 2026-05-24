@@ -51,8 +51,9 @@ INFO admin  message=server shutdown requested via admin command
 The `sessions` command shows per-session details when the registry is
 available. Heartbeat counts (`ping_rx`, `pong_tx`) are derived from the
 session event log and show zero when no heartbeat activity has occurred.
-A `heartbeat=<label>` field shows the report-only planner decision for each
-session. Possible labels: `no_activity`, `healthy`, `no_pong_yet`,
+A `heartbeat=<label>` field shows the planner decision for each session,
+evaluated under the configured heartbeat policy (default: `report_only`).
+Possible labels: `no_activity`, `healthy`, `no_pong_yet`,
 `warn_timeout`, `unhealthy`, `would_disconnect`.
 
 ```

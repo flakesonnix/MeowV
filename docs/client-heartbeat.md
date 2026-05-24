@@ -34,6 +34,16 @@ Policy Planner (M4.11):
   - `WouldWarnTimeout` — one or more timeouts/errors (both policies below disconnect threshold)
   - `WouldMarkUnhealthy` — pong gap with no recorded timeout (server-only view)
   - `WouldDisconnectMissedHeartbeat` — `Strict` only, `timeout_or_error >= 3`
-- Server builds diagnostics with `with_heartbeat_policy(ReportOnly)` — decision appears in diagnostic log output.
+- Server builds diagnostics with `with_heartbeat_policy(&config.heartbeat.policy)` — decision appears in diagnostic log output.
 - Server-only view uses `timeout_or_error = 0` (client-side timeout counts are not reported back to server).
 - This is planning only — no actual disconnect or enforcement occurs in this milestone.
+
+Config Plumbing (M4.13):
+
+- `[heartbeat]` section in `example.server.toml` with `policy = "report_only"` (default) or `"strict"`.
+- `HeartbeatSection` struct in `config.rs` with `Default → ReportOnly`.
+- Configured policy is set on `SessionRegistry` via `set_heartbeat_policy()` at startup.
+- Registry snapshot carries the policy; `to_diagnostics_text()` evaluates labels under the configured policy.
+- `ServerRuntimeStatus::to_text()` includes `heartbeat_policy: <value>` for operator inspection.
+- Startup lifecycle summary includes `heartbeat_policy:` line.
+- No disconnect enforcement occurs regardless of policy setting in this milestone.
