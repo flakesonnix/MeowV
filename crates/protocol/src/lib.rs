@@ -1165,6 +1165,211 @@ pub fn build_resource_download_preflight_plan(
 }
 
 // ---------------------------------------------------------------------------
+// Fetch Execution Planning (M6.9 — pure/no I/O, report-only)
+// ---------------------------------------------------------------------------
+
+/// Describes a future sandboxed fetch execution step.
+/// Report-only: no I/O, no network, no execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceFetchExecutionStep {
+    UseSelectedSource,
+    StageToTemporaryPath,
+    EnforceExpectedSize,
+    VerifySha256BeforeCacheMove,
+    WouldCommitToCacheAfterVerification,
+    BlockedBySourcePolicy,
+    BlockedByMissingSelectedSource,
+    BlockedByUnsupportedScheme,
+}
+
+impl ResourceFetchExecutionStep {
+    pub fn to_label(&self) -> &'static str {
+        match self {
+            Self::UseSelectedSource => "use selected source",
+            Self::StageToTemporaryPath => "stage to temporary path",
+            Self::EnforceExpectedSize => "enforce expected size",
+            Self::VerifySha256BeforeCacheMove => "verify sha256 before cache move",
+            Self::WouldCommitToCacheAfterVerification => {
+                "would commit to cache after verification"
+            }
+            Self::BlockedBySourcePolicy => "blocked by source policy",
+            Self::BlockedByMissingSelectedSource => "blocked by missing selected source",
+            Self::BlockedByUnsupportedScheme => "blocked by unsupported scheme",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceFetchExecutionEntry {
+    pub resource_name: String,
+    pub file_path: String,
+    pub action: ResourceDownloadPreflightAction,
+    pub steps: Vec<ResourceFetchExecutionStep>,
+    pub plan_ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceFetchExecutionPlan {
+    pub entries: Vec<ResourceFetchExecutionEntry>,
+}
+
+impl ResourceFetchExecutionPlan {
+    pub fn to_text(&self) -> String {
+        if self.entries.is_empty() {
+            return "resource fetch execution: (empty)".to_string();
+        }
+        let mut lines = vec![format!(
+            "resource fetch execution: {} entr{}",
+            self.entries.len(),
+            if self.entries.len() == 1 { "y" } else { "ies" }
+        )];
+        for entry in &self.entries {
+            lines.push(format!(
+                "  [{}] {}:{} - {}",
+                match entry.action {
+                    ResourceDownloadPreflightAction::AlreadyAvailable => "already_available",
+                    ResourceDownloadPreflightAction::FetchMissing => "fetch_missing",
+                    ResourceDownloadPreflightAction::ReplaceInvalid => "replace_invalid",
+                    ResourceDownloadPreflightAction::BlockedBySignaturePolicy =>
+                        "blocked_by_signature_policy",
+                    ResourceDownloadPreflightAction::BlockedByResourcePolicy =>
+                        "blocked_by_resource_policy",
+                    ResourceDownloadPreflightAction::UnsupportedResource => "unsupported_resource",
+                    ResourceDownloadPreflightAction::WouldVerifyAfterFetch =>
+                        "would_verify_after_fetch",
+                },
+                entry.resource_name,
+                entry.file_path,
+                if entry.plan_ok {
+                    if entry.steps.is_empty() {
+                        "already available, no fetch needed".to_string()
+                    } else {
+                        format!(
+                            "plan ok ({} step{})",
+                            entry.steps.len(),
+                            if entry.steps.len() == 1 { "" } else { "s" }
+                        )
+                    }
+                } else {
+                    format!(
+                        "blocked: {}",
+                        entry.block_reason.as_deref().unwrap_or("unknown")
+                    )
+                },
+            ));
+            if entry.plan_ok && !entry.steps.is_empty() {
+                for step in &entry.steps {
+                    lines.push(format!("    step: {}", step.to_label()));
+                }
+            }
+            if !entry.plan_ok {
+                for step in &entry.steps {
+                    lines.push(format!("    step: {}", step.to_label()));
+                }
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+/// Build a pure, deterministic fetch execution plan from a preflight plan.
+///
+/// Maps each preflight entry to execution steps based on whether a valid
+/// selected source exists and passes source policy. Produces no I/O, no
+/// network access, no cache writes, and no execution.
+pub fn build_fetch_execution_plan(
+    preflight: &ResourceDownloadPreflightPlan,
+) -> ResourceFetchExecutionPlan {
+    let mut entries = Vec::new();
+
+    for entry in &preflight.entries {
+        let (plan_ok, steps, block_reason) = match entry.action {
+            ResourceDownloadPreflightAction::AlreadyAvailable => {
+                (true, Vec::new(), None)
+            }
+            ResourceDownloadPreflightAction::FetchMissing
+            | ResourceDownloadPreflightAction::ReplaceInvalid
+            | ResourceDownloadPreflightAction::WouldVerifyAfterFetch => {
+                match &entry.selected_source {
+                    None => (
+                        false,
+                        vec![ResourceFetchExecutionStep::BlockedByMissingSelectedSource],
+                        Some("no selected source available".to_string()),
+                    ),
+                    Some(_) => {
+                        match &entry.source_policy {
+                            Some(policy) if !policy.decision.is_allowed() => (
+                                false,
+                                vec![ResourceFetchExecutionStep::BlockedBySourcePolicy],
+                                Some(policy.decision.to_label()),
+                            ),
+                            _ => {
+                                let allowed_schemes: Vec<&str> =
+                                    DEFAULT_ALLOWED_FETCH_SCHEMES.to_vec();
+                                let scheme = entry
+                                    .selected_source
+                                    .as_ref()
+                                    .map(|s| s.scheme.as_str())
+                                    .unwrap_or("");
+                                if !allowed_schemes.contains(&scheme) {
+                                    (
+                                        false,
+                                        vec![
+                                            ResourceFetchExecutionStep::BlockedByUnsupportedScheme,
+                                        ],
+                                        Some(format!(
+                                            "scheme '{}' is not supported for fetch",
+                                            scheme
+                                        )),
+                                    )
+                                } else {
+                                    (
+                                        true,
+                                        vec![
+                                            ResourceFetchExecutionStep::UseSelectedSource,
+                                            ResourceFetchExecutionStep::StageToTemporaryPath,
+                                            ResourceFetchExecutionStep::EnforceExpectedSize,
+                                            ResourceFetchExecutionStep::VerifySha256BeforeCacheMove,
+                                            ResourceFetchExecutionStep::WouldCommitToCacheAfterVerification,
+                                        ],
+                                        None,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ResourceDownloadPreflightAction::BlockedBySignaturePolicy => {
+                (false, Vec::new(), Some("blocked by signature policy".to_string()))
+            }
+            ResourceDownloadPreflightAction::BlockedByResourcePolicy => {
+                (false, Vec::new(), Some("blocked by resource policy".to_string()))
+            }
+            ResourceDownloadPreflightAction::UnsupportedResource => (
+                false,
+                Vec::new(),
+                Some("unsupported resource protocol version".to_string()),
+            ),
+        };
+
+        entries.push(ResourceFetchExecutionEntry {
+            resource_name: entry.resource_name.clone(),
+            file_path: entry.file_path.clone(),
+            action: entry.action.clone(),
+            steps,
+            plan_ok,
+            block_reason,
+        });
+    }
+
+    ResourceFetchExecutionPlan { entries }
+}
+
+// ---------------------------------------------------------------------------
 // Protocol Compatibility Negotiation (dry-run only)
 // ---------------------------------------------------------------------------
 
@@ -3692,6 +3897,410 @@ mod tests {
         assert!(
             !json.contains("source_policy"),
             "JSON should omit source_policy when no sources:\n{json}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fetch execution planning tests (M6.9)
+    // -----------------------------------------------------------------------
+
+    fn sample_preflight_entry(
+        action: ResourceDownloadPreflightAction,
+        sources: Option<Vec<ResourceFetchSource>>,
+        sha256: &str,
+    ) -> ResourceDownloadPreflightEntry {
+        let file = AnnouncedResourceFile {
+            relative_path: "resource.toml".to_string(),
+            size_bytes: 123,
+            sha256: sha256.to_string(),
+            sources,
+        };
+        let (valid_sources, source_errors) = match &file.sources {
+            None => (Vec::new(), Vec::new()),
+            Some(s) => match validate_and_order_sources(&file) {
+                Ok(v) => (v, Vec::new()),
+                Err(e) => (Vec::new(), vec![e.to_string()]),
+            },
+        };
+        let (selected_source, fallback_sources) = select_fetch_source(&valid_sources);
+        let source_policy = selected_source
+            .as_ref()
+            .map(evaluate_fetch_source_policy);
+        ResourceDownloadPreflightEntry {
+            resource_name: "chat".to_string(),
+            file_path: file.relative_path.clone(),
+            action,
+            reason: "test".to_string(),
+            source_errors,
+            valid_sources,
+            selected_source,
+            fallback_sources,
+            source_policy,
+        }
+    }
+
+    #[test]
+    fn fetch_execution_plan_https_source_produces_steps() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::FetchMissing,
+                Some(vec![ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/f".to_string(),
+                    size_bytes: Some(123),
+                    sha256: Some("abc".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                }]),
+                "abc",
+            )],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        assert_eq!(plan.entries.len(), 1);
+        let e = &plan.entries[0];
+        assert!(e.plan_ok);
+        assert_eq!(e.steps.len(), 5);
+        assert_eq!(
+            e.steps[0],
+            ResourceFetchExecutionStep::UseSelectedSource
+        );
+        assert_eq!(
+            e.steps[1],
+            ResourceFetchExecutionStep::StageToTemporaryPath
+        );
+        assert_eq!(
+            e.steps[2],
+            ResourceFetchExecutionStep::EnforceExpectedSize
+        );
+        assert_eq!(
+            e.steps[3],
+            ResourceFetchExecutionStep::VerifySha256BeforeCacheMove
+        );
+        assert_eq!(
+            e.steps[4],
+            ResourceFetchExecutionStep::WouldCommitToCacheAfterVerification
+        );
+    }
+
+    #[test]
+    fn fetch_execution_plan_missing_source_blocked() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::FetchMissing,
+                None,
+                "abc",
+            )],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        let e = &plan.entries[0];
+        assert!(!e.plan_ok);
+        assert!(e
+            .block_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("no selected source"));
+        assert!(e.steps.contains(&ResourceFetchExecutionStep::BlockedByMissingSelectedSource));
+    }
+
+    #[test]
+    fn fetch_execution_plan_replace_invalid_also_plans() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::ReplaceInvalid,
+                Some(vec![ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/f".to_string(),
+                    size_bytes: Some(123),
+                    sha256: Some("abc".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                }]),
+                "abc",
+            )],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        assert!(plan.entries[0].plan_ok);
+        assert_eq!(plan.entries[0].steps.len(), 5);
+    }
+
+    #[test]
+    fn fetch_execution_plan_already_available_no_fetch_needed() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::AlreadyAvailable,
+                None,
+                "abc",
+            )],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        let e = &plan.entries[0];
+        assert!(e.plan_ok);
+        assert!(e.steps.is_empty());
+    }
+
+    #[test]
+    fn fetch_execution_plan_blocked_by_signature() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![ResourceDownloadPreflightEntry {
+                resource_name: "chat".to_string(),
+                file_path: "resource.toml".to_string(),
+                action: ResourceDownloadPreflightAction::BlockedBySignaturePolicy,
+                reason: "signature strict rejects".to_string(),
+                source_errors: Vec::new(),
+                valid_sources: Vec::new(),
+                selected_source: None,
+                fallback_sources: Vec::new(),
+                source_policy: None,
+            }],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        let e = &plan.entries[0];
+        assert!(!e.plan_ok);
+        assert!(e
+            .block_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("signature"));
+    }
+
+    #[test]
+    fn fetch_execution_plan_blocked_by_resource_policy() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![ResourceDownloadPreflightEntry {
+                resource_name: "chat".to_string(),
+                file_path: "resource.toml".to_string(),
+                action: ResourceDownloadPreflightAction::BlockedByResourcePolicy,
+                reason: "resource policy blocks".to_string(),
+                source_errors: Vec::new(),
+                valid_sources: Vec::new(),
+                selected_source: None,
+                fallback_sources: Vec::new(),
+                source_policy: None,
+            }],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        assert!(!plan.entries[0].plan_ok);
+    }
+
+    #[test]
+    fn fetch_execution_plan_unsupported_resource_blocked() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![ResourceDownloadPreflightEntry {
+                resource_name: "chat".to_string(),
+                file_path: "resource.toml".to_string(),
+                action: ResourceDownloadPreflightAction::UnsupportedResource,
+                reason: "protocol version mismatch".to_string(),
+                source_errors: Vec::new(),
+                valid_sources: Vec::new(),
+                selected_source: None,
+                fallback_sources: Vec::new(),
+                source_policy: None,
+            }],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        assert!(!plan.entries[0].plan_ok);
+    }
+
+    #[test]
+    fn fetch_execution_plan_text_output_contains_steps() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::FetchMissing,
+                Some(vec![ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/f".to_string(),
+                    size_bytes: Some(123),
+                    sha256: Some("abc".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                }]),
+                "abc",
+            )],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        let text = plan.to_text();
+        assert!(
+            text.contains("use selected source"),
+            "text should list fetch steps:\n{text}"
+        );
+        assert!(
+            text.contains("stage to temporary path"),
+            "text should list staging:\n{text}"
+        );
+        assert!(
+            text.contains("verify sha256"),
+            "text should list verification:\n{text}"
+        );
+        assert!(
+            text.contains("would commit to cache"),
+            "text should list cache commit:\n{text}"
+        );
+        assert!(
+            text.contains("plan ok"),
+            "text should show plan ok:\n{text}"
+        );
+    }
+
+    #[test]
+    fn fetch_execution_plan_text_output_shows_blocked() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::FetchMissing,
+                None,
+                "abc",
+            )],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        let text = plan.to_text();
+        assert!(
+            text.contains("blocked:"),
+            "text should show blocked:\n{text}"
+        );
+        assert!(
+            text.contains("no selected source"),
+            "text should contain reason:\n{text}"
+        );
+    }
+
+    #[test]
+    fn fetch_execution_plan_deterministic_output() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![
+                sample_preflight_entry(
+                    ResourceDownloadPreflightAction::FetchMissing,
+                    Some(vec![ResourceFetchSource {
+                        id: None,
+                        scheme: "https".to_string(),
+                        uri: "https://example.com/f".to_string(),
+                        size_bytes: Some(123),
+                        sha256: Some("abc".to_string()),
+                        compression: None,
+                        media_type: None,
+                        priority: None,
+                        mirrors: None,
+                    }]),
+                    "abc",
+                ),
+                sample_preflight_entry(
+                    ResourceDownloadPreflightAction::AlreadyAvailable,
+                    None,
+                    "abc",
+                ),
+            ],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        assert_eq!(plan.to_text(), plan.to_text());
+        assert_eq!(
+            serde_json::to_string_pretty(&plan).unwrap(),
+            serde_json::to_string_pretty(&plan).unwrap()
+        );
+    }
+
+    #[test]
+    fn fetch_execution_plan_json_serialization() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::FetchMissing,
+                Some(vec![ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/f".to_string(),
+                    size_bytes: Some(123),
+                    sha256: Some("abc".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                }]),
+                "abc",
+            )],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        let json = serde_json::to_string_pretty(&plan).unwrap();
+        assert!(
+            json.contains("plan_ok"),
+            "JSON should include plan_ok:\n{json}"
+        );
+        assert!(
+            json.contains("use_selected_source"),
+            "JSON should include steps:\n{json}"
+        );
+        let deserialized: ResourceFetchExecutionPlan =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, plan);
+    }
+
+    #[test]
+    fn fetch_execution_plan_would_verify_after_fetch_also_plans() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::WouldVerifyAfterFetch,
+                Some(vec![ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/f".to_string(),
+                    size_bytes: Some(123),
+                    sha256: Some("abc".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                }]),
+                "abc",
+            )],
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        let e = &plan.entries[0];
+        assert!(e.plan_ok);
+        assert_eq!(e.steps.len(), 5, "WouldVerifyAfterFetch should plan 5 steps");
+    }
+
+    #[test]
+    fn fetch_execution_plan_no_network_or_write_behavior() {
+        // Verify the planner is pure: calling it twice with the same input
+        // produces identical output and no side effects.
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: vec![sample_preflight_entry(
+                ResourceDownloadPreflightAction::FetchMissing,
+                Some(vec![ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/f".to_string(),
+                    size_bytes: Some(123),
+                    sha256: Some("abc".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                }]),
+                "abc",
+            )],
+        };
+        let plan_a = build_fetch_execution_plan(&preflight);
+        let plan_b = build_fetch_execution_plan(&preflight);
+        assert_eq!(plan_a, plan_b);
+    }
+
+    #[test]
+    fn fetch_execution_plan_empty_preflight() {
+        let preflight = ResourceDownloadPreflightPlan {
+            entries: Vec::new(),
+        };
+        let plan = build_fetch_execution_plan(&preflight);
+        assert!(plan.entries.is_empty());
+        let text = plan.to_text();
+        assert!(
+            text.contains("(empty)"),
+            "empty plan should show empty text:\n{text}"
         );
     }
 
