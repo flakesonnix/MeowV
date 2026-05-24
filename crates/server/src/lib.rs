@@ -937,13 +937,68 @@ async fn handle_client(
                     session.state().clone(),
                     format!("server heartbeat: sent ServerPing {}", srv_ping_sequence),
                 );
+                let pings_sent = event_log.count_kind(SessionEventKind::ServerPingSent);
+                let pongs_received = event_log.count_kind(SessionEventKind::ServerPongReceived);
                 state.registry.lock().unwrap().update_server_heartbeat_counts(
                     &session_id,
-                    event_log.count_kind(SessionEventKind::ServerPingSent),
-                    event_log.count_kind(SessionEventKind::ServerPongReceived),
+                    pings_sent,
+                    pongs_received,
                 );
                 info!(%client_id, sequence = srv_ping_sequence, "sent server_ping");
                 srv_ping_sequence = srv_ping_sequence.saturating_add(1);
+
+                if config.heartbeat.policy == HeartbeatPolicy::Strict {
+                    let srv_hb_input = ServerHeartbeatPlannerInput {
+                        pings_sent: pings_sent as u64,
+                        pongs_received: pongs_received as u64,
+                    };
+                    if evaluate_server_heartbeat(&srv_hb_input, &HeartbeatPolicy::Strict)
+                        == ServerHeartbeatDecision::WouldDisconnect
+                    {
+                        let missed = pings_sent.saturating_sub(pongs_received);
+                        let reason = format!(
+                            "server heartbeat enforcement: {} missed pong(s), threshold {}",
+                            missed, MISSED_SERVER_PONG_DISCONNECT_THRESHOLD
+                        );
+                        session.fail(reason.clone());
+                        warn!(
+                            %client_id,
+                            pings_sent,
+                            pongs_received,
+                            missed,
+                            "server heartbeat enforcement: missed pong threshold reached, disconnecting"
+                        );
+                        event_log.record(
+                            SessionEventKind::Failed,
+                            SessionState::Failed,
+                            reason.clone(),
+                        );
+                        state.registry.lock().unwrap().update_session(
+                            &session_id,
+                            SessionState::Failed,
+                            event_log.len(),
+                        );
+                        if config.diagnostics.print_session_diagnostics {
+                            let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                .with_enforcement(&config.enforcement.mode)
+                                .with_heartbeat_policy(&config.heartbeat.policy);
+                            let text = match config.diagnostics.format {
+                                Fmt::Text => diag.to_text(),
+                                Fmt::JsonStub => diag.to_json_stub(),
+                            };
+                            info!(%client_id, "session diagnostics (server heartbeat enforcement):\n{text}");
+                        }
+                        let _ = client_tx.send(ServerMessage::Disconnect {
+                            reason: DisconnectReason::InvalidHandshake,
+                            message: format!(
+                                "server heartbeat: {} missed pong(s) exceeded threshold of {}",
+                                missed, MISSED_SERVER_PONG_DISCONNECT_THRESHOLD
+                            ),
+                        });
+                        info!(%client_id, missed, "server heartbeat enforcement: session disconnected");
+                        break;
+                    }
+                }
             }
         } // close select!
     } // close loop

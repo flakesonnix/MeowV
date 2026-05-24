@@ -208,40 +208,29 @@ async fn srv_heartbeat_awaiting_pong_when_no_reply_sent() -> Result<()> {
 }
 
 #[tokio::test]
-async fn srv_heartbeat_would_disconnect_under_strict_at_threshold() -> Result<()> {
+async fn srv_heartbeat_strict_enforcement_removes_session_at_threshold() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let state = Arc::new(SharedState::default());
     let server_state = state.clone();
-    // Fast interval, Strict policy, no replies from client
+    // Fast interval, Strict policy, no replies from client.
+    // M4.20: server actually disconnects at threshold — session removed from registry.
     let config = make_config(&addr.to_string(), 20, HeartbeatPolicy::Strict);
 
     let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
 
-    let (_w, mut lines) = connect_and_complete_handshake(addr).await?;
+    let (_w, _lines) = connect_and_complete_handshake(addr).await?;
 
-    // Wait until server has sent >= threshold pings without any pong
-    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as usize;
-    let wait_ms = (threshold as u64 + 2) * 20 + 50; // enough for threshold+2 pings to fire
+    // Wait until >= threshold pings would fire plus handler cleanup time.
+    let threshold = MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as u64;
+    let wait_ms = (threshold + 3) * 20 + 150;
     sleep(Duration::from_millis(wait_ms)).await;
 
-    // Drain pending messages
-    while let Ok(Ok(Some(_))) =
-        timeout(Duration::from_millis(5), lines.next_line()).await
-    {}
-
     let snap = server_state.registry.lock().unwrap().snapshot();
-    let entry = &snap.sessions[0];
-    assert!(
-        entry.server_ping_sent_count >= threshold,
-        "expected >= {} pings, got {}",
-        threshold,
-        entry.server_ping_sent_count
+    assert_eq!(
+        snap.connected_sessions, 0,
+        "Strict enforcement must remove session after threshold missed server pongs"
     );
-    assert_eq!(entry.server_pong_received_count, 0);
-
-    let text = snap.to_diagnostics_text();
-    assert!(text.contains("srv_heartbeat=would_disconnect"), "text: {text}");
 
     server_task.abort();
     Ok(())
