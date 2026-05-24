@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use base64::Engine as _;
 use game_edition::{GameEdition, GamePlatform};
 use protocol::signature_engine::{
-    SignaturePolicy, TrustedPublicKey, evaluate_signature_policy,
-    execute_verification_plan, validate_trusted_key_config,
+    SignaturePolicy, TrustedPublicKey, evaluate_signature_policy, execute_verification_plan,
+    validate_trusted_key_config,
 };
 use protocol::{
     AnnouncedResource, ClientMessage, JoinGateDecision, JoinGateMode, JoinGateOutcome,
