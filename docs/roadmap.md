@@ -77,6 +77,7 @@
 | 6.5 | Fetch source metadata preflight reporting — validate source schemes, deduplicate, sort; per-entry source_errors and valid_sources in preflight output; report-only, no fetch |
 | 6.6 | Fetch source selection planning — deterministic candidate selection by priority/id/uri; selected_source and fallback_sources per preflight entry; report-only, no fetch |
 | 6.7 | Fetch source policy planning — evaluate selected source against allowed schemes; source_policy report per entry; report-only, no fetch |
+| 6.8 | Sandboxed fetch execution design — design spec for staged fetch, verification, cache commit; no implementation |
 
 ---
 
@@ -266,6 +267,38 @@ Fetch source policy planning:
   - `preflight_source_policy_absent_in_json_when_no_sources`
 - No fetch, no network access, no cache writes, no execution, no protocol version change
 - All existing test behavior preserved
+
+---
+
+## Milestone 6.8
+
+Sandboxed fetch execution design (docs-only):
+
+- New design doc: `docs/sandboxed-fetch-execution-design.md`
+- Defines six fetch phases:
+  - **Resolve** — pick selected source, validate policy
+  - **Fetch to staging** — stream to temp path with size/timeout/redirect limits
+  - **Verify** — SHA-256 match against announced hash
+  - **Policy gate** — optional signature/resource policy check before cache commit
+  - **Cache commit** — atomic rename to cache; fail cleanly on error
+  - **Observe** — log outcome, update cache verification state
+- Defines sandbox boundaries:
+  - Temp writes restricted to `.staging/` subdirectory
+  - Cache writes only after successful verification
+  - No symlinks, no path traversal, no execution
+  - No credential forwarding, no archive extraction
+- Defines network policy:
+  - Allowed schemes from source policy (https, file, ipfs)
+  - Configurable timeout, byte limit, redirect limit
+  - Configurable User-Agent
+- Defines 12 failure modes with phase and handling
+- Defines observability via dry-run, structured logs, and optional JSON report
+- Defines three follow-up milestones:
+  - **M6.9** — Fetch execution planner, pure/no I/O
+  - **M6.10** — Staged fetch implementation behind explicit opt-in flag
+  - **M6.11** — Cache commit / atomic move after verification
+- No runtime behavior changes, no code changes, no test changes
+- All existing tests unchanged (527 pass)
 
 ---
 
