@@ -11,6 +11,7 @@ use protocol::{
     SignatureVerificationStatus, TrustedKey, build_signature_verification_plan,
     check_announcement_signature_stub, current_login_capabilities, current_protocol_profile,
     decode_server_line, encode_line, negotiate_protocol_dry_run,
+    evaluate_resource_policy,
 };
 use protocol::signature_engine::{
     KeyConfigError, SignaturePolicy, TrustedPublicKey, evaluate_signature_policy,
@@ -202,6 +203,10 @@ async fn main() -> Result<()> {
 
     if let Some(path) = read_flag(&args, "--verify-announcement-signature") {
         return print_verify_announcement_signature(&path, &args, &signature_policy);
+    }
+
+    if let Some(path) = read_flag(&args, "--plan-resource-downloads") {
+        return print_resource_download_preflight(&path, &args, &signature_policy);
     }
 
     let config = ClientConfig::load(&args)?;
@@ -954,6 +959,72 @@ fn print_verify_announcement_signature(
         }
     }
 
+    Ok(())
+}
+
+pub(crate) fn get_resource_download_preflight_plan_text(
+    path: &str,
+    args: &[String],
+    policy: &SignaturePolicy,
+) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read announcement file: {path}"))?;
+    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
+        .context("failed to parse ResourceAnnouncement JSON")?;
+
+    // trusted keys handling: match behavior in other CLI commands
+    let _trusted_keys = if let Some(key_path) = read_flag(args, "--trusted-keys") {
+        let keys = load_trusted_keys(&key_path)
+            .with_context(|| format!("failed to load trusted keys from '{key_path}'"))?;
+        validate_trusted_key_config(&keys).map_err(|e| {
+            anyhow::anyhow!("invalid trusted key config in '{key_path}': {e}")
+        })?;
+        keys
+    } else {
+        match policy {
+            SignaturePolicy::Strict => anyhow::bail!("--signature-policy strict requires --trusted-keys <path>"),
+            SignaturePolicy::ReportOnly => vec![],
+        }
+    };
+
+    // Build availability report using same logic as runtime announcement handling
+    let mut avail_entries: Vec<ResourceAvailabilityEntry> = Vec::new();
+    let resource_cache = read_flag(args, "--resource-cache");
+    for resource in &announcement.resources {
+        let entries = build_availability_entries(resource, resource_cache.as_deref())?;
+        avail_entries.extend(entries);
+    }
+    let is_fully_available = avail_entries
+        .iter()
+        .all(|entry| entry.status == ResourceAvailabilityStatus::Available);
+    let availability_report = ResourceAvailabilityReport {
+        resources: avail_entries,
+        is_fully_available,
+    };
+
+    let signature_report = check_announcement_signature_stub(&announcement);
+
+    let policy_evaluation = evaluate_resource_policy(&announcement, &availability_report);
+
+    let plan = protocol::build_resource_download_preflight_plan(
+        &announcement,
+        &availability_report,
+        &signature_report,
+        policy,
+        Some(&policy_evaluation),
+    );
+
+    Ok(plan.to_text())
+}
+
+fn print_resource_download_preflight(
+    path: &str,
+    args: &[String],
+    policy: &SignaturePolicy,
+) -> Result<()> {
+    let text = get_resource_download_preflight_plan_text(path, args, policy)?;
+    println!("{}", text);
+    println!("No files were downloaded, modified, or executed.");
     Ok(())
 }
 

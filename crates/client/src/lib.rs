@@ -9,6 +9,53 @@ use tokio::io::{BufReader, Lines};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Duration;
+use anyhow::Context;
+use protocol::{
+    ResourceAnnouncement, ResourceAvailabilityEntry, ResourceAvailabilityReport,
+    ResourceAvailabilityStatus, check_announcement_signature_stub, evaluate_resource_policy,
+};
+
+/// Deterministic, report-only resource download preflight planner helper.
+/// Mirrors CLI behavior. Does not perform network I/O or cache writes.
+pub fn get_resource_download_preflight_plan_text(
+    path: &str,
+    _args: &[String],
+    policy: &protocol::signature_engine::SignaturePolicy,
+) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read announcement file: {path}"))?;
+    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
+        .context("failed to parse ResourceAnnouncement JSON")?;
+
+    // Build availability report: default missing for all announced files (no cache inspected)
+    let mut avail_entries: Vec<ResourceAvailabilityEntry> = Vec::new();
+    for resource in &announcement.resources {
+        for file in &resource.files {
+            avail_entries.push(ResourceAvailabilityEntry {
+                resource_name: resource.name.clone(),
+                file_path: file.relative_path.clone(),
+                status: ResourceAvailabilityStatus::Missing,
+            });
+        }
+    }
+    let availability_report = ResourceAvailabilityReport {
+        resources: avail_entries,
+        is_fully_available: false,
+    };
+
+    let signature_report = check_announcement_signature_stub(&announcement);
+    let policy_eval = evaluate_resource_policy(&announcement, &availability_report);
+
+    let plan = protocol::build_resource_download_preflight_plan(
+        &announcement,
+        &availability_report,
+        &signature_report,
+        policy,
+        Some(&policy_eval),
+    );
+
+    Ok(plan.to_text())
+}
 
 /// Heartbeat enforcement policy for the client-side heartbeat loop.
 ///
