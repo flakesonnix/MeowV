@@ -1,4 +1,5 @@
 use crate::enforcement::SessionEnforcementPolicy;
+use crate::heartbeat_planner::HeartbeatPolicy;
 use protocol::signature_engine::SignaturePolicy;
 use protocol::PROTOCOL_VERSION;
 
@@ -24,6 +25,7 @@ pub struct ServerRuntimeStatus {
     pub admin_stdin_enabled: bool,
     pub session_enforcement: String,
     pub signature_policy: String,
+    pub heartbeat_policy: String,
 }
 
 impl ServerRuntimeStatus {
@@ -53,6 +55,10 @@ impl ServerRuntimeStatus {
             signature_policy: match config.signature.policy {
                 SignaturePolicy::ReportOnly => "report_only".to_string(),
                 SignaturePolicy::Strict => "strict".to_string(),
+            },
+            heartbeat_policy: match config.heartbeat.policy {
+                HeartbeatPolicy::ReportOnly => "report_only".to_string(),
+                HeartbeatPolicy::Strict => "strict".to_string(),
             },
         }
     }
@@ -87,7 +93,8 @@ impl ServerRuntimeStatus {
              diagnostics_enabled: {}\n\
              admin_stdin_enabled: {}\n\
              session_enforcement: {}\n\
-             signature_policy: {}",
+             signature_policy: {}\n\
+             heartbeat_policy: {}",
             self.server_name,
             self.bind_addr,
             self.protocol_version,
@@ -103,6 +110,7 @@ impl ServerRuntimeStatus {
             self.admin_stdin_enabled,
             self.session_enforcement,
             self.signature_policy,
+            self.heartbeat_policy,
         )
     }
 }
@@ -194,5 +202,29 @@ mod tests {
         assert!(text.contains("connected_sessions: 5"));
         assert!(text.contains("ready_dry_run_sessions: 2"));
         assert!(text.contains("failed_sessions: 1"));
+    }
+
+    #[test]
+    fn default_config_heartbeat_policy_is_report_only() {
+        let config = ServerConfig::default();
+        let status = ServerRuntimeStatus::from_config(&config);
+        assert_eq!(status.heartbeat_policy, "report_only");
+    }
+
+    #[test]
+    fn to_text_includes_heartbeat_policy_report_only() {
+        let config = ServerConfig::default();
+        let text = ServerRuntimeStatus::from_config(&config).to_text();
+        assert!(text.contains("heartbeat_policy: report_only"));
+    }
+
+    #[test]
+    fn status_from_strict_heartbeat_config() {
+        use crate::heartbeat_planner::HeartbeatPolicy;
+        let mut config = ServerConfig::default();
+        config.heartbeat.policy = HeartbeatPolicy::Strict;
+        let status = ServerRuntimeStatus::from_config(&config);
+        assert_eq!(status.heartbeat_policy, "strict");
+        assert!(status.to_text().contains("heartbeat_policy: strict"));
     }
 }

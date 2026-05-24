@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 use crate::enforcement::SessionEnforcementPolicy;
+use crate::heartbeat_planner::HeartbeatPolicy;
 use anyhow::Context;
 use protocol::signature_engine::SignaturePolicy;
 use protocol::PROTOCOL_VERSION;
@@ -251,6 +252,22 @@ impl Default for SignatureSection {
     }
 }
 
+// --- Section: [heartbeat] ---
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct HeartbeatSection {
+    pub policy: HeartbeatPolicy,
+}
+
+impl Default for HeartbeatSection {
+    fn default() -> Self {
+        Self {
+            policy: HeartbeatPolicy::ReportOnly,
+        }
+    }
+}
+
 // --- Top-level config ---
 
 #[derive(Debug, Clone, Deserialize)]
@@ -265,6 +282,7 @@ pub struct ServerConfig {
     pub admin: AdminSection,
     pub enforcement: EnforcementSection,
     pub signature: SignatureSection,
+    pub heartbeat: HeartbeatSection,
 }
 
 impl Default for ServerConfig {
@@ -279,6 +297,7 @@ impl Default for ServerConfig {
             admin: AdminSection::default(),
             enforcement: EnforcementSection::default(),
             signature: SignatureSection::default(),
+            heartbeat: HeartbeatSection::default(),
         }
     }
 }
@@ -370,6 +389,10 @@ join gate enforcement is not yet supported"
             SignaturePolicy::ReportOnly => "report_only",
             SignaturePolicy::Strict => "strict",
         };
+        let hb_policy = match &self.heartbeat.policy {
+            HeartbeatPolicy::ReportOnly => "report_only",
+            HeartbeatPolicy::Strict => "strict",
+        };
         format!(
             "server_name: {}\n\
              bind_addr: {}\n\
@@ -386,7 +409,8 @@ join gate enforcement is not yet supported"
              log_level: {}\n\
              log_format: {}\n\
              session_enforcement: {enforce_mode}\n\
-             signature_policy: {sig_policy}",
+             signature_policy: {sig_policy}\n\
+             heartbeat_policy: {hb_policy}",
             self.server.name,
             self.server.bind_addr,
             PROTOCOL_VERSION,
@@ -736,5 +760,68 @@ local_stdin_enabled = true
         assert!(!text.contains("client_ip"));
         assert!(!text.contains("peer_addr"));
         assert!(!text.contains("remote_addr"));
+    }
+
+    #[test]
+    fn default_heartbeat_policy_is_report_only() {
+        let cfg = ServerConfig::default();
+        assert_eq!(cfg.heartbeat.policy, HeartbeatPolicy::ReportOnly);
+    }
+
+    #[test]
+    fn heartbeat_section_omitted_defaults_to_report_only() {
+        let toml = r#"
+[server]
+tick_rate = 20
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.heartbeat.policy, HeartbeatPolicy::ReportOnly);
+    }
+
+    #[test]
+    fn heartbeat_policy_strict_parses() {
+        let toml = r#"
+[heartbeat]
+policy = "strict"
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.heartbeat.policy, HeartbeatPolicy::Strict);
+    }
+
+    #[test]
+    fn heartbeat_policy_report_only_parses_explicitly() {
+        let toml = r#"
+[heartbeat]
+policy = "report_only"
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.heartbeat.policy, HeartbeatPolicy::ReportOnly);
+    }
+
+    #[test]
+    fn invalid_heartbeat_policy_is_rejected() {
+        let toml = r#"
+[heartbeat]
+policy = "aggressive"
+"#;
+        let result: Result<ServerConfig, _> = toml::from_str(toml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn lifecycle_summary_includes_heartbeat_policy_report_only() {
+        let text = ServerConfig::default().to_lifecycle_summary_text();
+        assert!(text.contains("heartbeat_policy: report_only"));
+    }
+
+    #[test]
+    fn lifecycle_summary_includes_heartbeat_policy_strict() {
+        let toml = r#"
+[heartbeat]
+policy = "strict"
+"#;
+        let cfg: ServerConfig = toml::from_str(toml).unwrap();
+        let text = cfg.to_lifecycle_summary_text();
+        assert!(text.contains("heartbeat_policy: strict"));
     }
 }

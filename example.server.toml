@@ -72,3 +72,9 @@ mode = "report_only"
 # logs signature status but never rejects. "strict" rejects unsigned or invalid
 # signatures.
 policy = "report_only"
+
+[heartbeat]
+# Heartbeat timeout evaluation policy. "report_only" (default) logs heartbeat
+# decisions but never disconnects. "strict" evaluates whether repeated missed
+# heartbeats would trigger a disconnect (no enforcement in current milestone).
+policy = "report_only"

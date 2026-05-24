@@ -11,8 +11,8 @@ mod status;
 
 pub use config::{
     AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, EnforcementSection,
-    JoinGateConfigMode, JoinGateSection, LogFormat, LogLevel, LoggingSection, ProtocolSection,
-    ResourcesSection, ServerConfig, ServerSection, SignatureSection,
+    HeartbeatSection, JoinGateConfigMode, JoinGateSection, LogFormat, LogLevel, LoggingSection,
+    ProtocolSection, ResourcesSection, ServerConfig, ServerSection, SignatureSection,
 };
 pub use enforcement::{SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement};
 pub use heartbeat_planner::{
@@ -118,6 +118,12 @@ pub async fn run_with_listener_and_state(
     state: Arc<SharedState>,
 ) -> Result<()> {
     let (tx, _) = broadcast::channel(256);
+
+    state
+        .registry
+        .lock()
+        .unwrap()
+        .set_heartbeat_policy(config.heartbeat.policy.clone());
 
     spawn_tick_loop(config.clone(), state.clone(), tx.clone());
 
@@ -335,7 +341,7 @@ async fn handle_client(
                     if config.diagnostics.print_session_diagnostics {
                         let diag = SessionDiagnostics::from_parts(&session, &event_log)
                             .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                            .with_heartbeat_policy(&config.heartbeat.policy);
                         let text = match config.diagnostics.format {
                             Fmt::Text => diag.to_text(),
                             Fmt::JsonStub => diag.to_json_stub(),
@@ -382,7 +388,7 @@ async fn handle_client(
                     if config.diagnostics.print_session_diagnostics {
                         let diag = SessionDiagnostics::from_parts(&session, &event_log)
                             .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                            .with_heartbeat_policy(&config.heartbeat.policy);
                         let text = match config.diagnostics.format {
                             Fmt::Text => diag.to_text(),
                             Fmt::JsonStub => diag.to_json_stub(),
@@ -668,7 +674,7 @@ async fn handle_client(
                             if config.diagnostics.print_session_diagnostics {
                                 let diag = SessionDiagnostics::from_parts(&session, &event_log)
                                     .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                            .with_heartbeat_policy(&config.heartbeat.policy);
                                 let text = match config.diagnostics.format {
                                     Fmt::Text => diag.to_text(),
                                     Fmt::JsonStub => diag.to_json_stub(),
@@ -754,7 +760,7 @@ async fn handle_client(
                                 if config.diagnostics.print_session_diagnostics {
                                     let diag = SessionDiagnostics::from_parts(&session, &event_log)
                                         .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                            .with_heartbeat_policy(&config.heartbeat.policy);
                                     let text = match config.diagnostics.format {
                                         Fmt::Text => diag.to_text(),
                                         Fmt::JsonStub => diag.to_json_stub(),
@@ -804,7 +810,7 @@ async fn handle_client(
                             if config.diagnostics.print_session_diagnostics {
                                 let diag = SessionDiagnostics::from_parts(&session, &event_log)
                                     .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                            .with_heartbeat_policy(&config.heartbeat.policy);
                                 let text = match config.diagnostics.format {
                                     Fmt::Text => diag.to_text(),
                                     Fmt::JsonStub => diag.to_json_stub(),
@@ -849,7 +855,7 @@ async fn handle_client(
                             if config.diagnostics.print_session_diagnostics {
                                 let diag = SessionDiagnostics::from_parts(&session, &event_log)
                                     .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                            .with_heartbeat_policy(&config.heartbeat.policy);
                                 let text = match config.diagnostics.format {
                                     Fmt::Text => diag.to_text(),
                                     Fmt::JsonStub => diag.to_json_stub(),
@@ -878,7 +884,7 @@ async fn handle_client(
                         if config.diagnostics.print_session_diagnostics {
                             let diag = SessionDiagnostics::from_parts(&session, &event_log)
                                 .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                            .with_heartbeat_policy(&config.heartbeat.policy);
                             let text = match config.diagnostics.format {
                                 Fmt::Text => diag.to_text(),
                                 Fmt::JsonStub => diag.to_json_stub(),
@@ -947,7 +953,7 @@ async fn handle_enforcement(
                 let diag =
                     SessionDiagnostics::from_parts(session, event_log)
                         .with_enforcement(policy)
-                        .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                        .with_heartbeat_policy(&config.heartbeat.policy);
                 let text = match config.diagnostics.format {
                     Fmt::Text => diag.to_text(),
                     Fmt::JsonStub => diag.to_json_stub(),
@@ -976,7 +982,7 @@ async fn handle_enforcement(
                 let diag =
                     SessionDiagnostics::from_parts(session, event_log)
                         .with_enforcement(policy)
-                        .with_heartbeat_policy(&HeartbeatPolicy::ReportOnly);
+                        .with_heartbeat_policy(&config.heartbeat.policy);
                 let text = match config.diagnostics.format {
                     Fmt::Text => diag.to_text(),
                     Fmt::JsonStub => diag.to_json_stub(),

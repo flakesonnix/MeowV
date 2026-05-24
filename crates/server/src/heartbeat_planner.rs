@@ -1,5 +1,8 @@
+use serde::Deserialize;
+
 /// Heartbeat timeout policy mode. Report-only by default; no enforcement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HeartbeatPolicy {
     /// Never escalate to disconnect. Log issues only.
     ReportOnly,

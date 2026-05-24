@@ -39,6 +39,7 @@ pub struct SessionRegistrySnapshot {
     pub ready_dry_run_sessions: usize,
     pub failed_sessions: usize,
     pub sessions: Vec<SessionRegistryEntry>,
+    pub heartbeat_policy: HeartbeatPolicy,
 }
 
 impl SessionRegistrySnapshot {
@@ -64,7 +65,7 @@ impl SessionRegistrySnapshot {
                 pong_received: entry.pong_sent_count as u64,
                 timeout_or_error: 0,
             };
-            let hb_label = evaluate_heartbeat(&hb_input, &HeartbeatPolicy::ReportOnly)
+            let hb_label = evaluate_heartbeat(&hb_input, &self.heartbeat_policy)
                 .to_short_label();
             lines.push(format!(
                 "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  ping_rx={}  pong_tx={}  heartbeat={}",
@@ -82,6 +83,7 @@ impl SessionRegistrySnapshot {
 pub struct SessionRegistry {
     next_id: u64,
     entries: BTreeMap<SessionId, SessionRegistryEntry>,
+    heartbeat_policy: HeartbeatPolicy,
 }
 
 impl SessionRegistry {
@@ -89,7 +91,14 @@ impl SessionRegistry {
         Self {
             next_id: 1,
             entries: BTreeMap::new(),
+            heartbeat_policy: HeartbeatPolicy::ReportOnly,
         }
+    }
+
+    /// Update the heartbeat policy used when generating diagnostics text.
+    /// Call this once after config is loaded; defaults to `ReportOnly`.
+    pub fn set_heartbeat_policy(&mut self, policy: HeartbeatPolicy) {
+        self.heartbeat_policy = policy;
     }
 
     /// Register a new session, starting in `Connected` state. Returns its ID.
@@ -174,6 +183,7 @@ impl SessionRegistry {
             ready_dry_run_sessions,
             failed_sessions,
             sessions,
+            heartbeat_policy: self.heartbeat_policy.clone(),
         }
     }
 }
@@ -495,5 +505,49 @@ mod tests {
         reg.create_session();
         let snap = reg.snapshot();
         assert_eq!(snap.to_diagnostics_text(), snap.to_diagnostics_text());
+    }
+
+    #[test]
+    fn default_heartbeat_policy_is_report_only() {
+        let reg = SessionRegistry::new();
+        let snap = reg.snapshot();
+        assert_eq!(snap.heartbeat_policy, HeartbeatPolicy::ReportOnly);
+    }
+
+    #[test]
+    fn set_heartbeat_policy_updates_snapshot() {
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::Strict);
+        let snap = reg.snapshot();
+        assert_eq!(snap.heartbeat_policy, HeartbeatPolicy::Strict);
+    }
+
+    #[test]
+    fn strict_policy_shows_no_activity_for_new_session() {
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::Strict);
+        reg.create_session();
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("heartbeat=no_activity"));
+    }
+
+    #[test]
+    fn strict_policy_shows_healthy_after_ping_pong() {
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::Strict);
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 3, 3);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("heartbeat=healthy"));
+    }
+
+    #[test]
+    fn strict_policy_shows_unhealthy_for_pong_gap() {
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::Strict);
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 5, 3);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("heartbeat=unhealthy"));
     }
 }
