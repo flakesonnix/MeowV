@@ -72,6 +72,7 @@
 | 5.1 | Login capability payload + protocol version bump — `Login` carries required/optional capabilities and optional feature flags; protocol bumped to v2; client sends payload; server reads/stores payload; legacy missing-payload login rejected |
 | 5.2 | Capability negotiation report / dry-run gate — deterministic accepted / accepted_with_warnings / would_reject report from `LoginCapabilities` and server policy; surfaced in diagnostics/admin/status; no disconnect enforcement |
 | 5.3 | Strict required capability enforcement — explicit capability policy with `report_only` default and `strict` reject-on-would_reject behavior; registry/diagnostics updated; no wire change |
+| 5.4 | Capability enforcement UX / invariants — document operator-visible ReportOnly vs Strict guarantees, clarify capability-vs-protocol rejection boundaries, and add invariant coverage without behavior change |
 
 ---
 
@@ -149,6 +150,22 @@ Strict required capability enforcement:
 - Session state is marked failed before disconnect; event log and diagnostics include capability-negotiation context
 - Session registry records negotiation report before strict rejection and still cleans up on handler exit
 - No protocol wire changes and no new capability-enforcement behavior beyond missing required capabilities
+
+---
+
+## Milestone 5.4
+
+Capability enforcement UX / invariants:
+
+- Documents final operator-facing capability enforcement behavior in `docs/server-policy-configuration.md`
+- Makes the key invariants explicit:
+  - `report_only` never disconnects for capability negotiation result
+  - `strict` disconnects only on `would_reject`
+  - `accepted_with_warnings` remains allowed under `strict`
+  - protocol mismatch remains separate from capability rejection
+  - missing capability payload remains `InvalidHandshake`, not ordinary capability negotiation
+- Adds invariant coverage for `strict` + warning-only capability negotiation remaining connected
+- No runtime behavior change, no wire change, no version bump
 
 ---
 

@@ -234,7 +234,7 @@ claimed in first v2 rollout.
 - add optional strict rejection path for missing required capabilities only when capability policy is `strict`
 
 ### M5.4
-- optional policy enforcement for required capabilities
+- document final ReportOnly vs Strict invariants and operator-visible rejection boundaries
 
 ## Non-Goals
 

@@ -10,6 +10,7 @@ enforcement decisions are applied:
 | `[enforcement]` | `mode` | `"report_only"`, `"strict"` | `"report_only"` |
 | `[signature]` | `policy` | `"report_only"`, `"strict"` | `"report_only"` |
 | `[heartbeat]` | `policy` | `"report_only"`, `"strict"` | `"report_only"` |
+| `[protocol]` | `capability_policy` | `"report_only"`, `"strict"` | `"report_only"` |
 
 ## Session Enforcement Policy (`[enforcement]`)
 
@@ -50,6 +51,23 @@ See `docs/client-heartbeat.md` for planner decisions, label descriptions, and
 enforcement invariants. See `docs/m4-enforcement-heartbeat-summary.md` for the
 full M4 stack summary.
 
+## Capability Policy (`[protocol]`)
+
+Controls how capability negotiation `accepted` / `accepted_with_warnings` /
+`would_reject` results affect live login handling.
+
+| Mode | Behavior |
+|------|----------|
+| `"report_only"` | Capability negotiation remains observational only. `would_reject` is surfaced in diagnostics/registry/admin output but does not disconnect the client. |
+| `"strict"` | Login is rejected only when capability negotiation result is `would_reject` (missing required capability). `accepted_with_warnings` still proceeds. |
+
+Invariants:
+
+- `accepted_with_warnings` never disconnects by itself, even under `strict`
+- Unknown optional capabilities and unknown feature flags remain warning-only
+- Protocol version mismatch remains a separate earlier gate from capability rejection
+- Missing `Login` capability payload remains `InvalidHandshake`, not normal capability negotiation
+
 ## Example Config
 
 ### ReportOnly (default, safe)
@@ -63,6 +81,9 @@ policy = "report_only"
 
 [heartbeat]
 policy = "report_only"
+
+[protocol]
+capability_policy = "report_only"
 ```
 
 ### Strict Session Enforcement
@@ -76,6 +97,9 @@ policy = "report_only"
 
 [heartbeat]
 policy = "report_only"
+
+[protocol]
+capability_policy = "strict"
 ```
 
 ### Strict Everything
@@ -89,17 +113,20 @@ policy = "strict"
 
 [heartbeat]
 policy = "strict"
+
+[protocol]
+capability_policy = "strict"
 ```
 
 ## Validation
 
-Both policy fields are deserialized from TOML via serde. Unknown enum
+All policy fields are deserialized from TOML via serde. Unknown enum
 values (e.g. `mode = "permissive"`) produce a clear parse error at
 startup.
 
 There is no silent downgrade: if `"strict"` is explicitly configured,
 the server uses `Strict` policy. The lifecycle summary logged at
-startup includes both policy values for operator inspection.
+startup includes all policy values for operator inspection.
 
 ## Visibility
 
@@ -107,17 +134,20 @@ Policies are visible in:
 
 - **Startup log**: `info!("server lifecycle config:\n{}", ...)` includes
   `session_enforcement: report_only` / `strict` and
-  `signature_policy: report_only` / `strict`
+  `signature_policy: report_only` / `strict` plus `capability_policy`
 - **Admin status command**: `ServerRuntimeStatus::to_text()` includes
-  `session_enforcement`, `signature_policy`, and `heartbeat_policy` fields
+  `session_enforcement`, `signature_policy`, `heartbeat_policy`, and
+  `capability_policy` fields
 - **Session diagnostics**: When the session fails and `print_session_diagnostics`
   is enabled, the diagnostic output includes the active enforcement policy
-  and the decision that was evaluated
+  and the decision that was evaluated; capability negotiation decision and
+  missing required capabilities are included when available
 
 ## Hard Boundaries
 
 - No protocol wire-format changes
-- No new enforcement behavior beyond M4.2
+- No protocol wire-format changes
+- No silent fallback from Strict to ReportOnly
+- Capability `strict` only disconnects for `would_reject` (missing required capability)
 - No resource download/cache changes
 - No execution of resources
-- No silent fallback from Strict to ReportOnly
