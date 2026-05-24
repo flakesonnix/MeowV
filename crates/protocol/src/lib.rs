@@ -348,6 +348,138 @@ pub fn all_login_capabilities(capabilities: &LoginCapabilities) -> Vec<ProtocolC
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityNegotiationPolicy {
+    pub required: Vec<ProtocolCapability>,
+    pub optional: Vec<ProtocolCapability>,
+}
+
+impl CapabilityNegotiationPolicy {
+    pub fn normalize(&mut self) {
+        self.required.sort();
+        self.required.dedup();
+        self.optional.sort();
+        self.optional.dedup();
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityNegotiationDecision {
+    Accepted,
+    AcceptedWithWarnings,
+    WouldReject,
+}
+
+impl CapabilityNegotiationDecision {
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::AcceptedWithWarnings => "accepted_with_warnings",
+            Self::WouldReject => "would_reject",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityNegotiationWarning {
+    MissingOptionalCapability { capability: ProtocolCapability },
+    UnknownFeatureFlag { feature_flag: String },
+    UnsupportedOptionalCapability { capability: ProtocolCapability },
+}
+
+impl CapabilityNegotiationWarning {
+    pub fn to_text(&self) -> String {
+        match self {
+            Self::MissingOptionalCapability { capability } => {
+                format!("missing optional capability: {}", capability.to_name())
+            }
+            Self::UnsupportedOptionalCapability { capability } => {
+                format!("client advertised unsupported optional capability: {}", capability.to_name())
+            }
+            Self::UnknownFeatureFlag { feature_flag } => {
+                format!("unknown feature flag: {feature_flag}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityNegotiationViolation {
+    MissingRequiredCapability { capability: ProtocolCapability },
+}
+
+impl CapabilityNegotiationViolation {
+    pub fn to_text(&self) -> String {
+        match self {
+            Self::MissingRequiredCapability { capability } => {
+                format!("missing required capability: {}", capability.to_name())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityNegotiationReport {
+    pub decision: CapabilityNegotiationDecision,
+    pub required_supported: Vec<ProtocolCapability>,
+    pub required_missing: Vec<ProtocolCapability>,
+    pub optional_supported: Vec<ProtocolCapability>,
+    pub optional_missing: Vec<ProtocolCapability>,
+    pub unsupported_client_optional: Vec<ProtocolCapability>,
+    pub unknown_feature_flags: Vec<String>,
+    pub warnings: Vec<CapabilityNegotiationWarning>,
+    pub violations: Vec<CapabilityNegotiationViolation>,
+}
+
+impl CapabilityNegotiationReport {
+    pub fn to_text(&self) -> String {
+        let fmt_caps = |caps: &[ProtocolCapability]| {
+            if caps.is_empty() {
+                "<none>".to_string()
+            } else {
+                caps.iter().map(ProtocolCapability::to_name).collect::<Vec<_>>().join(",")
+            }
+        };
+        let fmt_flags = |flags: &[String]| {
+            if flags.is_empty() {
+                "<none>".to_string()
+            } else {
+                flags.join(",")
+            }
+        };
+        let fmt_warn = |warnings: &[CapabilityNegotiationWarning]| {
+            if warnings.is_empty() {
+                "<none>".to_string()
+            } else {
+                warnings.iter().map(CapabilityNegotiationWarning::to_text).collect::<Vec<_>>().join(" | ")
+            }
+        };
+        let fmt_viol = |violations: &[CapabilityNegotiationViolation]| {
+            if violations.is_empty() {
+                "<none>".to_string()
+            } else {
+                violations.iter().map(CapabilityNegotiationViolation::to_text).collect::<Vec<_>>().join(" | ")
+            }
+        };
+
+        format!(
+            "capability_negotiation_decision: {}\nrequired_supported: {}\nrequired_missing: {}\noptional_supported: {}\noptional_missing: {}\nunsupported_client_optional: {}\nunknown_feature_flags: {}\nwarnings: {}\nviolations: {}",
+            self.decision.to_text(),
+            fmt_caps(&self.required_supported),
+            fmt_caps(&self.required_missing),
+            fmt_caps(&self.optional_supported),
+            fmt_caps(&self.optional_missing),
+            fmt_caps(&self.unsupported_client_optional),
+            fmt_flags(&self.unknown_feature_flags),
+            fmt_warn(&self.warnings),
+            fmt_viol(&self.violations),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DisconnectReason {
     ProtocolMismatch,
@@ -558,6 +690,18 @@ pub enum ProtocolCapability {
     SignatureMetadata,
 }
 
+impl ProtocolCapability {
+    pub fn to_name(&self) -> &'static str {
+        match self {
+            Self::ResourceAnnouncement => "resource_announcement",
+            Self::ResourceAvailabilityReport => "resource_availability_report",
+            Self::JoinGateDryRun => "join_gate_dry_run",
+            Self::ResourceCompatibilityReport => "resource_compatibility_report",
+            Self::SignatureMetadata => "signature_metadata",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProtocolCompatibilityProfile {
     pub version_range: ProtocolVersionRange,
@@ -587,6 +731,107 @@ pub fn current_protocol_profile() -> ProtocolCompatibilityProfile {
             max: PROTOCOL_VERSION,
         },
         capabilities: all_login_capabilities(&current_login_capabilities()),
+    }
+}
+
+pub fn current_capability_negotiation_policy() -> CapabilityNegotiationPolicy {
+    let mut policy = CapabilityNegotiationPolicy {
+        required: current_login_capabilities().required,
+        optional: current_login_capabilities().optional,
+    };
+    policy.normalize();
+    policy
+}
+
+pub fn evaluate_capability_negotiation(
+    advertised: &LoginCapabilities,
+    policy: &CapabilityNegotiationPolicy,
+) -> CapabilityNegotiationReport {
+    let mut normalized_advertised = advertised.clone();
+    normalized_advertised.normalize();
+    let mut normalized_policy = policy.clone();
+    normalized_policy.normalize();
+
+    let advertised_all = all_login_capabilities(&normalized_advertised);
+
+    let mut required_supported = Vec::new();
+    let mut required_missing = Vec::new();
+    for capability in &normalized_policy.required {
+        if advertised_all.contains(capability) {
+            required_supported.push(capability.clone());
+        } else {
+            required_missing.push(capability.clone());
+        }
+    }
+
+    let mut optional_supported = Vec::new();
+    let mut optional_missing = Vec::new();
+    for capability in &normalized_policy.optional {
+        if advertised_all.contains(capability) {
+            optional_supported.push(capability.clone());
+        } else {
+            optional_missing.push(capability.clone());
+        }
+    }
+
+    let mut unsupported_client_optional: Vec<ProtocolCapability> = normalized_advertised
+        .optional
+        .iter()
+        .filter(|capability| {
+            !normalized_policy.required.contains(capability)
+                && !normalized_policy.optional.contains(capability)
+        })
+        .cloned()
+        .collect();
+    unsupported_client_optional.sort();
+    unsupported_client_optional.dedup();
+
+    let unknown_feature_flags = normalized_advertised.feature_flags.clone().unwrap_or_default();
+
+    let mut warnings = Vec::new();
+    for capability in &optional_missing {
+        warnings.push(CapabilityNegotiationWarning::MissingOptionalCapability {
+            capability: capability.clone(),
+        });
+    }
+    for capability in &unsupported_client_optional {
+        warnings.push(CapabilityNegotiationWarning::UnsupportedOptionalCapability {
+            capability: capability.clone(),
+        });
+    }
+    for feature_flag in &unknown_feature_flags {
+        warnings.push(CapabilityNegotiationWarning::UnknownFeatureFlag {
+            feature_flag: feature_flag.clone(),
+        });
+    }
+    warnings.sort();
+
+    let mut violations = Vec::new();
+    for capability in &required_missing {
+        violations.push(CapabilityNegotiationViolation::MissingRequiredCapability {
+            capability: capability.clone(),
+        });
+    }
+    violations.sort();
+
+    let decision = if !violations.is_empty() {
+        CapabilityNegotiationDecision::WouldReject
+    } else if !warnings.is_empty() {
+        CapabilityNegotiationDecision::AcceptedWithWarnings
+    } else {
+        CapabilityNegotiationDecision::Accepted
+    };
+
+    CapabilityNegotiationReport {
+        decision,
+        required_supported,
+        required_missing,
+        optional_supported,
+        optional_missing,
+        unsupported_client_optional,
+        unknown_feature_flags,
+        warnings,
+        violations,
     }
 }
 
@@ -1507,6 +1752,104 @@ mod tests {
                 ProtocolCapability::SignatureMetadata,
             ]
         );
+    }
+
+    #[test]
+    fn capability_negotiation_accepts_all_required_capabilities() {
+        let report = evaluate_capability_negotiation(
+            &current_login_capabilities(),
+            &current_capability_negotiation_policy(),
+        );
+        assert_eq!(report.decision, CapabilityNegotiationDecision::Accepted);
+        assert!(report.required_missing.is_empty());
+        assert!(report.warnings.is_empty());
+        assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn capability_negotiation_missing_required_reports_would_reject() {
+        let report = evaluate_capability_negotiation(
+            &LoginCapabilities {
+                required: vec![ProtocolCapability::ResourceAnnouncement],
+                optional: vec![],
+                feature_flags: None,
+            },
+            &current_capability_negotiation_policy(),
+        );
+        assert_eq!(report.decision, CapabilityNegotiationDecision::WouldReject);
+        assert_eq!(
+            report.violations,
+            vec![CapabilityNegotiationViolation::MissingRequiredCapability {
+                capability: ProtocolCapability::ResourceAvailabilityReport,
+            }]
+        );
+    }
+
+    #[test]
+    fn capability_negotiation_optional_and_feature_flag_warnings_are_report_only() {
+        let report = evaluate_capability_negotiation(
+            &LoginCapabilities {
+                required: vec![
+                    ProtocolCapability::ResourceAnnouncement,
+                    ProtocolCapability::ResourceAvailabilityReport,
+                ],
+                optional: vec![ProtocolCapability::SignatureMetadata],
+                feature_flags: Some(vec!["z_flag".to_string(), "a_flag".to_string()]),
+            },
+            &current_capability_negotiation_policy(),
+        );
+        assert_eq!(
+            report.decision,
+            CapabilityNegotiationDecision::AcceptedWithWarnings
+        );
+        assert_eq!(
+            report.optional_missing,
+            vec![
+                ProtocolCapability::JoinGateDryRun,
+                ProtocolCapability::ResourceCompatibilityReport,
+            ]
+        );
+        assert_eq!(
+            report.unknown_feature_flags,
+            vec!["a_flag".to_string(), "z_flag".to_string()]
+        );
+    }
+
+    #[test]
+    fn capability_negotiation_unsupported_optional_is_warning_only() {
+        let report = evaluate_capability_negotiation(
+            &LoginCapabilities {
+                required: current_login_capabilities().required,
+                optional: vec![ProtocolCapability::SignatureMetadata, ProtocolCapability::ResourceAnnouncement],
+                feature_flags: None,
+            },
+            &CapabilityNegotiationPolicy {
+                required: current_login_capabilities().required,
+                optional: vec![ProtocolCapability::JoinGateDryRun],
+            },
+        );
+        assert_eq!(
+            report.unsupported_client_optional,
+            vec![ProtocolCapability::SignatureMetadata]
+        );
+        assert_eq!(
+            report.decision,
+            CapabilityNegotiationDecision::AcceptedWithWarnings
+        );
+    }
+
+    #[test]
+    fn capability_negotiation_report_text_is_deterministic() {
+        let report = evaluate_capability_negotiation(
+            &LoginCapabilities {
+                required: vec![ProtocolCapability::ResourceAvailabilityReport],
+                optional: vec![ProtocolCapability::SignatureMetadata],
+                feature_flags: Some(vec!["z_flag".to_string(), "a_flag".to_string()]),
+            },
+            &current_capability_negotiation_policy(),
+        );
+        assert_eq!(report.to_text(), report.to_text());
+        assert!(report.to_text().contains("capability_negotiation_decision: would_reject"));
     }
 
     fn sample_announcement(requirement_level: ResourceRequirementLevel) -> ResourceAnnouncement {

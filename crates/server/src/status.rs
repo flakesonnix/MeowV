@@ -26,6 +26,8 @@ pub struct ServerRuntimeStatus {
     pub session_enforcement: String,
     pub signature_policy: String,
     pub heartbeat_policy: String,
+    pub capability_required_count: usize,
+    pub capability_optional_count: usize,
 }
 
 impl ServerRuntimeStatus {
@@ -60,6 +62,12 @@ impl ServerRuntimeStatus {
                 HeartbeatPolicy::ReportOnly => "report_only".to_string(),
                 HeartbeatPolicy::Strict => "strict".to_string(),
             },
+            capability_required_count: protocol::current_capability_negotiation_policy()
+                .required
+                .len(),
+            capability_optional_count: protocol::current_capability_negotiation_policy()
+                .optional
+                .len(),
         }
     }
 
@@ -94,7 +102,9 @@ impl ServerRuntimeStatus {
              admin_stdin_enabled: {}\n\
              session_enforcement: {}\n\
              signature_policy: {}\n\
-             heartbeat_policy: {}",
+             heartbeat_policy: {}
+             capability_required_count: {}
+             capability_optional_count: {}",
             self.server_name,
             self.bind_addr,
             self.protocol_version,
@@ -111,6 +121,8 @@ impl ServerRuntimeStatus {
             self.session_enforcement,
             self.signature_policy,
             self.heartbeat_policy,
+            self.capability_required_count,
+            self.capability_optional_count,
         )
     }
 }

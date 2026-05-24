@@ -5,7 +5,7 @@ use crate::heartbeat_planner::{
     evaluate_server_heartbeat,
 };
 use crate::session::SessionState;
-use protocol::LoginCapabilities;
+use protocol::{CapabilityNegotiationDecision, CapabilityNegotiationReport, LoginCapabilities};
 
 /// Opaque session identifier. Monotonic u64; never based on IP or personal data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -33,6 +33,7 @@ pub struct SessionRegistryEntry {
     pub failed: bool,
     pub protocol_version: Option<u32>,
     pub login_capabilities: Option<LoginCapabilities>,
+    pub capability_negotiation: Option<CapabilityNegotiationReport>,
     pub ping_received_count: usize,
     pub pong_sent_count: usize,
     pub server_ping_sent_count: usize,
@@ -76,6 +77,15 @@ impl SessionRegistrySnapshot {
                 ),
                 None => "login_caps=unknown".to_string(),
             };
+            let capability_negotiation = match &entry.capability_negotiation {
+                Some(report) => format!(
+                    "cap_negotiation={} warn={} viol={}",
+                    report.decision.to_text(),
+                    report.warnings.len(),
+                    report.violations.len()
+                ),
+                None => "cap_negotiation=unknown".to_string(),
+            };
             let hb_input = HeartbeatPlannerInput {
                 ping_sent: entry.ping_received_count as u64,
                 pong_received: entry.pong_sent_count as u64,
@@ -90,9 +100,9 @@ impl SessionRegistrySnapshot {
             let srv_hb_label = evaluate_server_heartbeat(&srv_hb_input, &self.heartbeat_policy)
                 .to_short_label();
             lines.push(format!(
-                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  {}  ping_rx={}  pong_tx={}  srv_ping_tx={}  srv_pong_rx={}  heartbeat={}  srv_heartbeat={}",
+                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  {}  {}  ping_rx={}  pong_tx={}  srv_ping_tx={}  srv_pong_rx={}  heartbeat={}  srv_heartbeat={}",
                 entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed, proto,
-                login_caps,
+                login_caps, capability_negotiation,
                 entry.ping_received_count, entry.pong_sent_count,
                 entry.server_ping_sent_count, entry.server_pong_received_count,
                 hb_label, srv_hb_label,
@@ -140,6 +150,7 @@ impl SessionRegistry {
                 failed: false,
                 protocol_version: None,
                 login_capabilities: None,
+                capability_negotiation: None,
                 ping_received_count: 0,
                 pong_sent_count: 0,
                 server_ping_sent_count: 0,
@@ -159,6 +170,16 @@ impl SessionRegistry {
     pub fn set_login_capabilities(&mut self, id: &SessionId, capabilities: LoginCapabilities) {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.login_capabilities = Some(capabilities);
+        }
+    }
+
+    pub fn set_capability_negotiation(
+        &mut self,
+        id: &SessionId,
+        report: CapabilityNegotiationReport,
+    ) {
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.capability_negotiation = Some(report);
         }
     }
 

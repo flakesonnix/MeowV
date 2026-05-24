@@ -37,10 +37,11 @@ use protocol::{
     AnnouncedResource, AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState,
     JoinGateDecision, JoinGateOutcome, PROTOCOL_VERSION, Position, ProtocolCapability,
     ProtocolCompatibilityProfile, ProtocolNegotiationStatus, ProtocolVersionRange,
-    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation,
-    ResourceRequirementLevel, ServerMessage, all_login_capabilities, build_join_gate_decision,
-    capability_gate_report, current_protocol_profile, decode_client_line, encode_line,
-    evaluate_resource_policy, negotiate_protocol_dry_run, shared_capabilities,
+    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation, ResourceRequirementLevel,
+    ServerMessage, all_login_capabilities, build_join_gate_decision, capability_gate_report,
+    current_capability_negotiation_policy, current_protocol_profile, decode_client_line,
+    encode_line, evaluate_capability_negotiation, evaluate_resource_policy,
+    negotiate_protocol_dry_run, shared_capabilities,
 };
 use resource_manifest::build_pack_index;
 use tokio::{
@@ -321,7 +322,7 @@ async fn handle_client(
         "client connected",
     );
     info!(%client_id, state = ?session.state(), "session: connected");
-    let (name, shared_caps) = match lines.next_line().await? {
+    let (name, shared_caps, capability_negotiation) = match lines.next_line().await? {
         Some(line) => match decode_client_line(&line) {
             Err(err) => {
                 send_direct(
@@ -454,6 +455,9 @@ async fn handle_client(
                 };
                 let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
                 let caps = shared_capabilities(&client_profile, &server_profile);
+                let capability_policy = current_capability_negotiation_policy();
+                let capability_negotiation =
+                    evaluate_capability_negotiation(&capabilities, &capability_policy);
                 info!(
                     client_version = protocol_version,
                     server_version = PROTOCOL_VERSION,
@@ -461,6 +465,9 @@ async fn handle_client(
                     optional_capability_count = capabilities.optional.len(),
                     feature_flag_count = capabilities.feature_flags.as_ref().map(|flags| flags.len()).unwrap_or(0),
                     negotiation_status = ?negotiation.status,
+                    capability_negotiation = capability_negotiation.decision.to_text(),
+                    capability_warning_count = capability_negotiation.warnings.len(),
+                    capability_violation_count = capability_negotiation.violations.len(),
                     shared_capability_count = caps.len(),
                     "protocol handshake: exact-match policy active, negotiation dry-run computed"
                 );
@@ -494,7 +501,16 @@ async fn handle_client(
                     event_log.record(
                         SessionEventKind::ProtocolNegotiationDryRun,
                         SessionState::NegotiationDryRunLogged,
-                        format!("negotiation log processed for {name}"),
+                        format!(
+                            "negotiation log processed for {name}; capability_negotiation={} warnings={} violations={}",
+                            capability_negotiation.decision.to_text(),
+                            capability_negotiation.warnings.len(),
+                            capability_negotiation.violations.len()
+                        ),
+                    );
+                    state.registry.lock().unwrap().set_capability_negotiation(
+                        &session_id,
+                        capability_negotiation.clone(),
                     );
                     state.registry.lock().unwrap().update_session(
                         &session_id,
@@ -504,7 +520,7 @@ async fn handle_client(
                     info!(%client_id, state = ?session.state(), "session: negotiation logged");
                 }
 
-                (name, caps)
+                (name, caps, capability_negotiation)
             }
             _ => {
                 send_direct(
@@ -730,8 +746,9 @@ async fn handle_client(
                                 event_log.len(),
                             );
                             if config.diagnostics.print_session_diagnostics {
-                                let diag = SessionDiagnostics::from_parts(&session, &event_log)
-                                    .with_enforcement(&config.enforcement.mode)
+                        let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                            .with_capability_negotiation(&capability_negotiation)
+                            .with_enforcement(&config.enforcement.mode)
                             .with_heartbeat_policy(&config.heartbeat.policy);
                                 let text = match config.diagnostics.format {
                                     Fmt::Text => diag.to_text(),
@@ -817,6 +834,7 @@ async fn handle_client(
                                 );
                                 if config.diagnostics.print_session_diagnostics {
                                     let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                        .with_capability_negotiation(&capability_negotiation)
                                         .with_enforcement(&config.enforcement.mode)
                             .with_heartbeat_policy(&config.heartbeat.policy);
                                     let text = match config.diagnostics.format {
@@ -867,6 +885,7 @@ async fn handle_client(
                             );
                             if config.diagnostics.print_session_diagnostics {
                                 let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                    .with_capability_negotiation(&capability_negotiation)
                                     .with_enforcement(&config.enforcement.mode)
                             .with_heartbeat_policy(&config.heartbeat.policy);
                                 let text = match config.diagnostics.format {
@@ -912,6 +931,7 @@ async fn handle_client(
                             );
                             if config.diagnostics.print_session_diagnostics {
                                 let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                    .with_capability_negotiation(&capability_negotiation)
                                     .with_enforcement(&config.enforcement.mode)
                             .with_heartbeat_policy(&config.heartbeat.policy);
                                 let text = match config.diagnostics.format {
@@ -941,6 +961,7 @@ async fn handle_client(
                         info!(%client_id, state = ?session.state(), "session: ready (dry-run)");
                         if config.diagnostics.print_session_diagnostics {
                             let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                .with_capability_negotiation(&capability_negotiation)
                                 .with_enforcement(&config.enforcement.mode)
                             .with_heartbeat_policy(&config.heartbeat.policy);
                             let text = match config.diagnostics.format {
@@ -1006,6 +1027,7 @@ async fn handle_client(
                         );
                         if config.diagnostics.print_session_diagnostics {
                             let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                .with_capability_negotiation(&capability_negotiation)
                                 .with_enforcement(&config.enforcement.mode)
                                 .with_heartbeat_policy(&config.heartbeat.policy);
                             let text = match config.diagnostics.format {

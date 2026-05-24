@@ -7,6 +7,7 @@ use crate::heartbeat_planner::{
     evaluate_server_heartbeat,
 };
 use crate::session::{SessionState, SessionStateMachine};
+use protocol::CapabilityNegotiationReport;
 
 pub struct SessionDiagnostics {
     pub current_state: SessionState,
@@ -24,6 +25,7 @@ pub struct SessionDiagnostics {
     pub enforcement_decision: Option<String>,
     pub heartbeat_decision: Option<String>,
     pub server_heartbeat_decision: Option<String>,
+    pub capability_negotiation: Option<CapabilityNegotiationReport>,
 }
 
 impl SessionDiagnostics {
@@ -46,7 +48,13 @@ impl SessionDiagnostics {
             enforcement_decision: None,
             heartbeat_decision: None,
             server_heartbeat_decision: None,
+            capability_negotiation: None,
         }
+    }
+
+    pub fn with_capability_negotiation(mut self, report: &CapabilityNegotiationReport) -> Self {
+        self.capability_negotiation = Some(report.clone());
+        self
     }
 
     /// Attach enforcement context. Evaluates the enforcement decision from
@@ -112,6 +120,9 @@ impl SessionDiagnostics {
         if let Some(srv_hb) = &self.server_heartbeat_decision {
             out.push_str(&format!("server_heartbeat_decision: {srv_hb}\n"));
         }
+        if let Some(report) = &self.capability_negotiation {
+            out.push_str(&format!("{}\n", report.to_text()));
+        }
         for ev in &self.events {
             out.push_str(&format!(
                 "  [{}] {:?} @ {:?}: {}\n",
@@ -147,7 +158,7 @@ impl SessionDiagnostics {
             "{{\"current_state\":\"{:?}\",\"ready_dry_run\":{},\"failure_reason\":{},\
 \"state_history\":[{}],\"event_count\":{},\"events\":[{}],\"last_event_message\":{},\
 \"ping_received_count\":{},\"pong_sent_count\":{},\"server_ping_sent_count\":{},\"server_pong_received_count\":{},\"enforcement_policy\":{},\"enforcement_decision\":{},\
-\"heartbeat_decision\":{},\"server_heartbeat_decision\":{}}}",
+\"heartbeat_decision\":{},\"server_heartbeat_decision\":{},\"capability_negotiation\":{}}}",
             self.current_state,
             self.ready_dry_run,
             optional_json_string(self.failure_reason.as_deref()),
@@ -163,6 +174,7 @@ impl SessionDiagnostics {
             optional_json_string(self.enforcement_decision.as_deref()),
             optional_json_string(self.heartbeat_decision.as_deref()),
             optional_json_string(self.server_heartbeat_decision.as_deref()),
+            optional_json_string(self.capability_negotiation.as_ref().map(|r| r.to_text()).as_deref()),
         )
     }
 }
