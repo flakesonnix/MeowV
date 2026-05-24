@@ -78,6 +78,7 @@
 | 6.6 | Fetch source selection planning — deterministic candidate selection by priority/id/uri; selected_source and fallback_sources per preflight entry; report-only, no fetch |
 | 6.7 | Fetch source policy planning — evaluate selected source against allowed schemes; source_policy report per entry; report-only, no fetch |
 | 6.8 | Sandboxed fetch execution design — design spec for staged fetch, verification, cache commit; no implementation |
+| 6.9 | Fetch execution planner — pure/no I/O planning from preflight data; steps for resolve, stage, verify, commit; report-only |
 
 ---
 
@@ -299,6 +300,47 @@ Sandboxed fetch execution design (docs-only):
   - **M6.11** — Cache commit / atomic move after verification
 - No runtime behavior changes, no code changes, no test changes
 - All existing tests unchanged (527 pass)
+
+---
+
+## Milestone 6.9
+
+Fetch execution planner (pure / no I/O):
+
+- New types for describing sandboxed fetch execution:
+  - `ResourceFetchExecutionStep` enum with 8 variants:
+    - `UseSelectedSource`, `StageToTemporaryPath`, `EnforceExpectedSize`,
+      `VerifySha256BeforeCacheMove`, `WouldCommitToCacheAfterVerification`,
+      `BlockedBySourcePolicy`, `BlockedByMissingSelectedSource`,
+      `BlockedByUnsupportedScheme`
+  - `ResourceFetchExecutionEntry` — per-file entry with `plan_ok`, `steps`, `block_reason`
+  - `ResourceFetchExecutionPlan` — aggregate plan with `to_text()` output
+- `build_fetch_execution_plan(preflight)` — pure deterministic function from preflight data
+- Produces per-entry plan:
+  - `FetchMissing` / `ReplaceInvalid` / `WouldVerifyAfterFetch` with valid selected source → 5-step execution plan
+  - `AlreadyAvailable` → empty steps, `plan_ok: true`
+  - Blocked entries → `plan_ok: false` with `block_reason` and relevant blocked step
+- Text output shows:
+  - `plan ok (N steps)` with indented step list
+  - `blocked: <reason>` with indented blocked step
+- JSON output includes all fields via serde; `block_reason` omitted when `None`
+- 14 new protocol unit tests (183 protocol tests total, 541 workspace):
+  - `fetch_execution_plan_https_source_produces_steps`
+  - `fetch_execution_plan_missing_source_blocked`
+  - `fetch_execution_plan_replace_invalid_also_plans`
+  - `fetch_execution_plan_already_available_no_fetch_needed`
+  - `fetch_execution_plan_blocked_by_signature`
+  - `fetch_execution_plan_blocked_by_resource_policy`
+  - `fetch_execution_plan_unsupported_resource_blocked`
+  - `fetch_execution_plan_text_output_contains_steps`
+  - `fetch_execution_plan_text_output_shows_blocked`
+  - `fetch_execution_plan_deterministic_output`
+  - `fetch_execution_plan_json_serialization`
+  - `fetch_execution_plan_would_verify_after_fetch_also_plans`
+  - `fetch_execution_plan_no_network_or_write_behavior`
+  - `fetch_execution_plan_empty_preflight`
+- No I/O, no network, no cache writes, no execution, no protocol version change
+- All existing test behavior preserved
 
 ---
 

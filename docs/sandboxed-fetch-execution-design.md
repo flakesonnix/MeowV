@@ -4,13 +4,14 @@
 
 This document is a **future-only design specification**. No fetching, network
 I/O, cache writing, or resource execution is implemented in the current
-milestone. Source metadata validation (M6.5), source selection (M6.6), and
-source policy reporting (M6.7) exist as pure, report-only preflight steps.
+milestone. Source metadata validation (M6.5), source selection (M6.6), source
+policy reporting (M6.7), and fetch execution planning (M6.9) exist as pure,
+report-only preflight steps.
 
-The next implementation milestone after this design is M6.9 (fetch execution
-planner, pure/no I/O), followed by M6.10 (staged fetch implementation behind
-an explicit opt-in flag) and M6.11 (cache commit / atomic move after
-verification).
+The next implementation milestone after this design is M6.10 (staged fetch
+implementation behind an explicit opt-in flag) and M6.11 (cache commit /
+atomic move after verification). M6.9 (fetch execution planner) is already
+implemented.
 
 ## Design Goals
 
@@ -220,3 +221,18 @@ verification).
 - Fetch never modifies the announcement, policy, or session state.
 - Cache commit is the only path from staging to cache, and it requires
   successful verification.
+
+## Implementation Status
+
+### M6.9 — Fetch Execution Planner ✅
+
+- `ResourceFetchExecutionStep` enum with 8 variants covering resolve, stage,
+  verify, commit, and blocked states.
+- `ResourceFetchExecutionEntry` — per-file entry with `plan_ok`, `steps`,
+  `block_reason`.
+- `ResourceFetchExecutionPlan` — aggregate plan with `to_text()` output.
+- `build_fetch_execution_plan(preflight)` — pure deterministic planner from
+  preflight data. No I/O, no network, no cache writes, no execution.
+- 14 unit tests covering all action types, blocked states, text/JSON output,
+  determinism, and purity guarantees.
+- 183 protocol tests / 541 workspace tests total.
