@@ -46,3 +46,15 @@ Source Selection Planning (M6.6):
 - JSON output includes `selected_source` and `fallback_sources` per entry; optional fields are omitted when empty (backward-compatible).
 - Selections are attached per preflight entry, including synthetic `WouldVerifyAfterFetch` entries.
 - Report-only: no source URL is ever used for fetching, network access, cache writes, or execution.
+
+Source Policy Planning (M6.7):
+
+- Each preflight entry includes a `source_policy` report for the selected source, if any.
+- `ResourceFetchSourcePolicyDecision::Allowed` — source scheme is in the default allowed set (`https`, `file`, `ipfs`).
+- `ResourceFetchSourcePolicyDecision::Blocked { reason }` — source scheme is not in the allowed set.
+- Policy is purely descriptive and permissive by default; all valid schemes pass.
+- Text output shows `source policy: allowed <scheme>` or `source policy: blocked:<reason> <scheme>`.
+- JSON output includes `source_policy` per entry when a selected source exists; field is omitted when `None`.
+- Unknown schemes (e.g., `ftp`) produce a blocked decision with the reason explaining the scheme is not allowed.
+- Policy is evaluated per preflight entry, including synthetic `WouldVerifyAfterFetch` entries.
+- Report-only: the policy decision does not block fetching; all preflight actions remain unchanged.
