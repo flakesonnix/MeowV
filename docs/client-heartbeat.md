@@ -102,3 +102,18 @@ Server-Side ServerPing Scheduler (M4.18):
 - `if srv_ping_enabled` guard on the tick branch disables it entirely when `server_ping_interval_ms == 0` — future is not polled when disabled.
 - `ServerPong` replies are validated for sequence fidelity at `info` level only — mismatch logged but not fatal under `ReportOnly` policy.
 - No disconnect enforcement in this milestone regardless of policy. `Strict` enforcement for missed server pongs is a future milestone.
+
+Server-Side Heartbeat Timeout Status / Planner (M4.19):
+
+- `ServerHeartbeatPlannerInput { pings_sent: u64, pongs_received: u64 }` — pure planner input for server-initiated direction; derived from `server_ping_sent_count` and `server_pong_received_count`.
+- `MISSED_SERVER_PONG_DISCONNECT_THRESHOLD = 3` — threshold for `WouldDisconnect` decision under `Strict`; mirrors client-side threshold.
+- `ServerHeartbeatDecision` variants and `srv_heartbeat=<label>` short labels:
+  - `NoActivity` / `"no_activity"` — no `ServerPing` sent yet
+  - `Healthy` / `"healthy"` — all pings answered
+  - `AwaitingPong` / `"awaiting_pong"` — pings sent, no pong ever received, below threshold
+  - `MissedPong` / `"missed_pong"` — some pong received but gap present, below threshold
+  - `WouldDisconnect` / `"would_disconnect"` — `Strict` only, `missed >= MISSED_SERVER_PONG_DISCONNECT_THRESHOLD`
+- `evaluate_server_heartbeat(input, policy)` — pure deterministic function; `ReportOnly` never escalates to `WouldDisconnect`.
+- `SessionRegistrySnapshot::to_diagnostics_text()` extended with `srv_heartbeat=<label>` per session; admin `sessions` output includes the label automatically.
+- `SessionDiagnostics::with_heartbeat_policy()` now evaluates both directions; `server_heartbeat_decision: Option<String>` field emitted as `server_heartbeat_decision: <label>` in `to_text()` and included in `to_json_stub()`.
+- No enforcement or actual disconnect in this milestone; `WouldDisconnect` is a planning-only label.

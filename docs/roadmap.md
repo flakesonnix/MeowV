@@ -64,6 +64,24 @@
 | 4.16 | Server-initiated heartbeat protocol stub — add `ServerMessage::ServerPing` and `ClientMessage::ServerPong` DTOs; server handler ignores `ServerPong` (inert); 8 round-trip tests; no timer, no enforcement |
 | 4.17 | Client responds to ServerPing — client receive loop and heartbeat path reply `ServerPong(sequence)` to `ServerPing(sequence)`; `handle_server_ping` public helper; 5 integration tests |
 | 4.18 | Server-side ServerPing scheduler, report-only — per-session `interval_at` timer sends `ServerPing` after handshake; `ServerPong` replies recorded; `srv_ping_tx` / `srv_pong_rx` in registry + diagnostics; `server_ping_interval_ms` config; 7 integration tests; no enforcement |
+| 4.19 | Server-side heartbeat timeout status / planner — `ServerHeartbeatPlannerInput`, `ServerHeartbeatDecision` (NoActivity/Healthy/AwaitingPong/MissedPong/WouldDisconnect), `evaluate_server_heartbeat`; `srv_heartbeat=<label>` in registry diagnostics and admin sessions; `server_heartbeat_decision` in `SessionDiagnostics`; 15 planner unit tests + 7 registry/admin unit tests + 6 integration tests; no enforcement |
+
+---
+
+## Milestone 4.19
+
+Server-side heartbeat timeout status / planner:
+
+- `ServerHeartbeatPlannerInput { pings_sent: u64, pongs_received: u64 }` — pure input struct for server-initiated direction
+- `MISSED_SERVER_PONG_DISCONNECT_THRESHOLD = 3` — mirrors client-side threshold
+- `ServerHeartbeatDecision` variants: `NoActivity`, `Healthy`, `AwaitingPong`, `MissedPong`, `WouldDisconnect`
+- `evaluate_server_heartbeat(input, policy)` — pure deterministic planner; `Strict` escalates to `WouldDisconnect` when `missed >= threshold`; `ReportOnly` never escalates beyond `AwaitingPong`/`MissedPong`
+- `ServerHeartbeatDecision::to_short_label()` → `"no_activity"` / `"healthy"` / `"awaiting_pong"` / `"missed_pong"` / `"would_disconnect"`
+- `SessionRegistrySnapshot::to_diagnostics_text()` extended with `srv_heartbeat=<label>` per session (computed from `server_ping_sent_count` / `server_pong_received_count`)
+- `SessionDiagnostics` gains `server_heartbeat_decision: Option<String>`; `with_heartbeat_policy()` now evaluates both client-initiated and server-initiated decisions in one call; `to_text()` emits `server_heartbeat_decision: <label>`; `to_json_stub()` includes field
+- Admin `sessions` output automatically includes `srv_heartbeat=<label>` via `to_diagnostics_text()`
+- All new items pub-exported from `server` crate
+- No actual disconnect, no enforcement; strict-policy WouldDisconnect is a planning label only
 
 ---
 
