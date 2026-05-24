@@ -68,6 +68,7 @@
 | 4.20 | Strict server-side heartbeat enforcement — `Strict` policy + `WouldDisconnect` decision → clean disconnect in scheduler tick arm; `SessionEventKind::Failed` recorded with structured reason; registry updated to `Failed` before removal; diagnostics emitted on enforcement; `ReportOnly` unchanged; 5 integration tests |
 | 4.21 | Heartbeat enforcement polish / invariants — code comments documenting best-effort Disconnect vs guaranteed EOF (writer_half drop); `handle_enforcement` doc note for direct-write path; `heartbeat-authority-design.md` implementation status; 1 deterministic integration test (`strict_enforcement_independent_of_client_ping_activity`) |
 | 4.22 | Milestone stack audit / release notes — concise M4.0-M4.21 summary doc covering enforcement, signature, client heartbeat, server-authoritative heartbeat, admin visibility, ReportOnly vs Strict behavior, and Disconnect-vs-EOF guarantees; roadmap updated; no runtime changes |
+| 5.0 | Capability model v2 design — define Login capability payload, required vs optional capability policy, unknown capability behavior, protocol version bump strategy, explicit negotiation result, and observability plan; design doc only, no wire changes |
 
 ---
 
@@ -86,6 +87,21 @@ Milestone stack audit / release notes:
   - best-effort `Disconnect` frame vs guaranteed TCP close / EOF
 - Cross-links existing detailed docs without changing runtime or protocol behavior
 - No code changes, no test changes, no enforcement changes
+
+---
+
+## Milestone 5.0
+
+Capability model v2 design:
+
+- New design doc: `docs/capability-model-v2-design.md`
+- Defines future `Login` capability payload and optional feature-flag extension point
+- Defines server policy shape for required vs optional capabilities
+- Defines unknown capability and legacy-client behavior
+- Recommends protocol version bump for first live rollout of capability payload
+- Defines explicit negotiation result model: accepted / accepted_with_warnings / rejected
+- Defines diagnostics, admin, and structured-log observability targets
+- No protocol wire change, no runtime behavior change, no enforcement change
 
 ---
 
