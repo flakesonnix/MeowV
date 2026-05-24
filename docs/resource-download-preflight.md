@@ -58,3 +58,21 @@ Source Policy Planning (M6.7):
 - Unknown schemes (e.g., `ftp`) produce a blocked decision with the reason explaining the scheme is not allowed.
 - Policy is evaluated per preflight entry, including synthetic `WouldVerifyAfterFetch` entries.
 - Report-only: the policy decision does not block fetching; all preflight actions remain unchanged.
+
+## Cache Reconciliation Planning (M6.13)
+
+**Status:** ✅ Implemented (planner-only, no CLI)
+
+The cache reconciliation planner compares three sources of truth to
+produce a deterministic, report-only plan:
+
+1. **Cache manifest** — `cache_manifest.json` (committed state from fetch pipeline)
+2. **Cache filesystem** — actual files in the cache directory (recursive scan)
+3. **Resource announcement** — server-advertised expected resources
+
+The planner is a pure function with no I/O, no side effects, and no
+repair execution. It produces a `CacheReconciliationPlan` with typed
+actions for each (resource, file) tuple found in any source.
+
+See `crates/client/src/reconciliation.rs` for the full implementation
+(977 lines, 22 unit tests).

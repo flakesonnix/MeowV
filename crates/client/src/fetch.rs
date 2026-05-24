@@ -224,7 +224,7 @@ impl CacheManifest {
     /// Merge a new entry into the manifest. If an entry with the same
     /// (resource_name, file_path) exists, it is replaced. Entries are
     /// re-sorted deterministically.
-    fn with_entry(mut self, entry: CacheManifestEntry) -> Self {
+    pub(crate) fn with_entry(mut self, entry: CacheManifestEntry) -> Self {
         let key = entry.sort_key();
         self.entries.retain(|e| e.sort_key() != key);
         self.entries.push(entry);
