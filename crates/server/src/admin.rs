@@ -525,4 +525,29 @@ mod tests {
         let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
         assert!(result.message.contains("heartbeat=healthy"));
     }
+
+    #[test]
+    fn sessions_shows_no_activity_heartbeat_under_strict_policy_for_new_session() {
+        use crate::heartbeat_planner::HeartbeatPolicy;
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::Strict);
+        reg.create_session();
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("heartbeat=no_activity"));
+    }
+
+    #[test]
+    fn sessions_shows_unhealthy_under_strict_policy_for_pong_gap() {
+        use crate::heartbeat_planner::HeartbeatPolicy;
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::Strict);
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 5, 3);
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("heartbeat=unhealthy"));
+    }
 }
