@@ -7,8 +7,8 @@ use protocol::{
     ServerMessage, decode_server_line, encode_line,
 };
 use server::{
-    EnforcementSection, ServerConfig, ServerSection, SessionEnforcementPolicy, SharedState,
-    run_with_listener_and_state,
+    CapabilityPolicy, EnforcementSection, ProtocolSection, ServerConfig, ServerSection,
+    SessionEnforcementPolicy, SharedState, run_with_listener_and_state,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -32,6 +32,34 @@ fn make_config(addr: &str, strict: bool) -> ServerConfig {
             },
         },
         ..ServerConfig::default()
+    }
+}
+
+fn make_capability_config(addr: &str, capability_policy: CapabilityPolicy) -> ServerConfig {
+    ServerConfig {
+        server: ServerSection {
+            bind_addr: addr.to_string(),
+            tick_rate: 20,
+            motd: "capability enforcement test".to_string(),
+            ..ServerSection::default()
+        },
+        protocol: ProtocolSection {
+            capability_policy,
+            ..ProtocolSection::default()
+        },
+        ..ServerConfig::default()
+    }
+}
+
+fn missing_required_capability_login(name: &str) -> ClientMessage {
+    ClientMessage::Login {
+        name: name.to_string(),
+        protocol_version: PROTOCOL_VERSION,
+        capabilities: protocol::LoginCapabilities {
+            required: vec![protocol::ProtocolCapability::ResourceAnnouncement],
+            optional: vec![protocol::ProtocolCapability::JoinGateDryRun],
+            feature_flags: None,
+        },
     }
 }
 
@@ -279,6 +307,70 @@ async fn strict_handshake_cleans_up_registry_on_disconnect() -> Result<()> {
     let snap = server_state.registry.lock().unwrap().snapshot();
     assert_eq!(snap.connected_sessions, 0);
     assert_eq!(snap.failed_sessions, 0);
+
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn report_only_missing_required_capability_does_not_disconnect() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let server_state = state.clone();
+    let config = make_capability_config(&addr.to_string(), CapabilityPolicy::ReportOnly);
+
+    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+
+    let stream = TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = BufReader::new(reader_half).lines();
+
+    writer_half
+        .write_all(encode_line(&missing_required_capability_login("cap-report-only"))?.as_bytes())
+        .await?;
+
+    let welcome = read_packet(&mut lines).await?;
+    assert!(matches!(welcome, ServerMessage::Welcome { .. }));
+
+    let snap = server_state.registry.lock().unwrap().snapshot();
+    let report = snap.sessions[0].capability_negotiation.clone().unwrap();
+    assert_eq!(report.decision.to_text(), "would_reject");
+
+    server_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn strict_missing_required_capability_disconnects() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = Arc::new(SharedState::default());
+    let server_state = state.clone();
+    let config = make_capability_config(&addr.to_string(), CapabilityPolicy::Strict);
+
+    let server_task = tokio::spawn(run_with_listener_and_state(listener, config, state));
+
+    let stream = TcpStream::connect(addr).await?;
+    let (reader_half, mut writer_half) = stream.into_split();
+    let mut lines = BufReader::new(reader_half).lines();
+
+    writer_half
+        .write_all(encode_line(&missing_required_capability_login("cap-strict"))?.as_bytes())
+        .await?;
+
+    let disconnect = read_packet(&mut lines).await?;
+    match disconnect {
+        ServerMessage::Disconnect { reason, message } => {
+            assert_eq!(reason, DisconnectReason::InvalidHandshake);
+            assert!(message.contains("missing required capability"));
+        }
+        other => panic!("expected Disconnect, got {other:?}"),
+    }
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let snap = server_state.registry.lock().unwrap().snapshot();
+    assert_eq!(snap.connected_sessions, 0);
 
     server_task.abort();
     Ok(())
