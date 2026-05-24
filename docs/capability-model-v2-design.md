@@ -231,6 +231,7 @@ claimed in first v2 rollout.
 
 ### M5.3
 - wire capability result into server handshake diagnostics / logs
+- add optional strict rejection path for missing required capabilities only when capability policy is `strict`
 
 ### M5.4
 - optional policy enforcement for required capabilities

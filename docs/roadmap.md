@@ -71,6 +71,7 @@
 | 5.0 | Capability model v2 design — define Login capability payload, required vs optional capability policy, unknown capability behavior, protocol version bump strategy, explicit negotiation result, and observability plan; design doc only, no wire changes |
 | 5.1 | Login capability payload + protocol version bump — `Login` carries required/optional capabilities and optional feature flags; protocol bumped to v2; client sends payload; server reads/stores payload; legacy missing-payload login rejected |
 | 5.2 | Capability negotiation report / dry-run gate — deterministic accepted / accepted_with_warnings / would_reject report from `LoginCapabilities` and server policy; surfaced in diagnostics/admin/status; no disconnect enforcement |
+| 5.3 | Strict required capability enforcement — explicit capability policy with `report_only` default and `strict` reject-on-would_reject behavior; registry/diagnostics updated; no wire change |
 
 ---
 
@@ -134,6 +135,20 @@ Capability negotiation report / dry-run gate:
 - Missing required capabilities are recorded as would-reject violations only; live handshake still proceeds in this milestone
 - Report is surfaced read-only through session diagnostics, live session registry/admin `sessions`, and server `status`
 - No protocol wire changes, no disconnects, no strict capability enforcement yet
+
+---
+
+## Milestone 5.3
+
+Strict required capability enforcement:
+
+- `protocol.capability_policy = report_only|strict` added to server config; default remains `report_only`
+- `report_only`: capability negotiation `would_reject` remains observational only; handshake behavior unchanged
+- `strict`: login is rejected when capability negotiation reports missing required capabilities
+- Strict rejection uses `Disconnect { reason: InvalidHandshake, message: "capability policy strict reject: ..." }`
+- Session state is marked failed before disconnect; event log and diagnostics include capability-negotiation context
+- Session registry records negotiation report before strict rejection and still cleans up on handler exit
+- No protocol wire changes and no new capability-enforcement behavior beyond missing required capabilities
 
 ---
 
