@@ -4,7 +4,7 @@ description = "Standalone scoreboard example resource"
 authors = ["MeowV Team"]
 license = "MIT"
 tags = ["scoreboard", "example"]
-protocol_version = 1
+protocol_version = 2
 edition_compatibility = "any"
 platform_compatibility = "any"
 

@@ -37,10 +37,10 @@ use protocol::{
     AnnouncedResource, AnnouncedResourceFile, ClientMessage, DisconnectReason, EntityState,
     JoinGateDecision, JoinGateOutcome, PROTOCOL_VERSION, Position, ProtocolCapability,
     ProtocolCompatibilityProfile, ProtocolNegotiationStatus, ProtocolVersionRange,
-    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation, ResourceRequirementLevel,
-    ServerMessage, build_join_gate_decision, capability_gate_report, current_protocol_profile,
-    decode_client_line, encode_line, evaluate_resource_policy, negotiate_protocol_dry_run,
-    shared_capabilities,
+    ResourceAnnouncement, ResourceJoinDecision, ResourcePolicyEvaluation,
+    ResourceRequirementLevel, ServerMessage, all_login_capabilities, build_join_gate_decision,
+    capability_gate_report, current_protocol_profile, decode_client_line, encode_line,
+    evaluate_resource_policy, negotiate_protocol_dry_run, shared_capabilities,
 };
 use resource_manifest::build_pack_index;
 use tokio::{
@@ -322,10 +322,23 @@ async fn handle_client(
     );
     info!(%client_id, state = ?session.state(), "session: connected");
     let (name, shared_caps) = match lines.next_line().await? {
-        Some(line) => match decode_client_line(&line)? {
+        Some(line) => match decode_client_line(&line) {
+            Err(err) => {
+                send_direct(
+                    &mut writer_half,
+                    &ServerMessage::Disconnect {
+                        reason: DisconnectReason::InvalidHandshake,
+                        message: format!("invalid login payload: {err}"),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+            Ok(message) => match message {
             ClientMessage::Login {
                 name,
                 protocol_version,
+                capabilities,
             } => {
                 if let Err(e) = session.on_hello_received() {
                     session.fail(e.to_string());
@@ -363,7 +376,16 @@ async fn handle_client(
                     event_log.record(
                         SessionEventKind::HelloReceived,
                         SessionState::HelloReceived,
-                        format!("login from {name}"),
+                        format!(
+                            "login from {name} (required_caps={} optional_caps={} feature_flags={})",
+                            capabilities.required.len(),
+                            capabilities.optional.len(),
+                            capabilities
+                                .feature_flags
+                                .as_ref()
+                                .map(|flags| flags.len())
+                                .unwrap_or(0)
+                        ),
                     );
                     state.registry.lock().unwrap().update_session(
                         &session_id,
@@ -417,6 +439,7 @@ async fn handle_client(
                 {
                     let mut reg = state.registry.lock().unwrap();
                     reg.set_protocol_version(&session_id, protocol_version);
+                    reg.set_login_capabilities(&session_id, capabilities.clone());
                     reg.update_session(&session_id, session.state().clone(), event_log.len());
                 }
                 info!(%client_id, state = ?session.state(), "session: version checked");
@@ -427,13 +450,16 @@ async fn handle_client(
                         min: protocol_version,
                         max: protocol_version,
                     },
-                    capabilities: Vec::new(),
+                    capabilities: all_login_capabilities(&capabilities),
                 };
                 let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
                 let caps = shared_capabilities(&client_profile, &server_profile);
                 info!(
                     client_version = protocol_version,
                     server_version = PROTOCOL_VERSION,
+                    required_capability_count = capabilities.required.len(),
+                    optional_capability_count = capabilities.optional.len(),
+                    feature_flag_count = capabilities.feature_flags.as_ref().map(|flags| flags.len()).unwrap_or(0),
                     negotiation_status = ?negotiation.status,
                     shared_capability_count = caps.len(),
                     "protocol handshake: exact-match policy active, negotiation dry-run computed"
@@ -491,7 +517,7 @@ async fn handle_client(
                 .await?;
                 return Ok(());
             }
-        },
+        }},
         None => return Ok(()),
     };
 

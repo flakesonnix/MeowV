@@ -5,11 +5,12 @@ use base64::Engine as _;
 use game_edition::{GameEdition, GamePlatform};
 use protocol::{
     AnnouncedResource, ClientMessage, JoinGateDecision, JoinGateMode, JoinGateOutcome,
-    PROTOCOL_VERSION, ProtocolCapability, ProtocolCompatibilityProfile, ProtocolVersionRange,
-    ResourceAnnouncement, ResourceAvailabilityEntry, ResourceAvailabilityReport,
-    ResourceAvailabilityStatus, ServerMessage, SignatureVerificationStatus, TrustedKey,
-    build_signature_verification_plan, check_announcement_signature_stub,
-    current_protocol_profile, decode_server_line, encode_line, negotiate_protocol_dry_run,
+    LoginCapabilities, PROTOCOL_VERSION, ProtocolCapability, ProtocolCompatibilityProfile,
+    ProtocolVersionRange, ResourceAnnouncement, ResourceAvailabilityEntry,
+    ResourceAvailabilityReport, ResourceAvailabilityStatus, ServerMessage,
+    SignatureVerificationStatus, TrustedKey, build_signature_verification_plan,
+    check_announcement_signature_stub, current_login_capabilities, current_protocol_profile,
+    decode_server_line, encode_line, negotiate_protocol_dry_run,
 };
 use protocol::signature_engine::{
     KeyConfigError, SignaturePolicy, TrustedPublicKey, evaluate_signature_policy,
@@ -223,6 +224,7 @@ async fn main() -> Result<()> {
                 encode_line(&ClientMessage::Login {
                     name: config.name.clone(),
                     protocol_version: PROTOCOL_VERSION,
+                    capabilities: current_login_capabilities(),
                 })?
                 .as_bytes(),
             )
@@ -250,6 +252,7 @@ async fn main() -> Result<()> {
             encode_line(&ClientMessage::Login {
                 name: config.name.clone(),
                 protocol_version: PROTOCOL_VERSION,
+                capabilities: current_login_capabilities(),
             })?
             .as_bytes(),
         )
@@ -261,7 +264,7 @@ async fn main() -> Result<()> {
             min: PROTOCOL_VERSION,
             max: PROTOCOL_VERSION,
         },
-        capabilities: vec![],
+        capabilities: login_capability_set(&current_login_capabilities()),
     };
     let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
     println!(
@@ -1059,7 +1062,7 @@ fn print_protocol_negotiation_dry_run() -> Result<()> {
             min: PROTOCOL_VERSION,
             max: PROTOCOL_VERSION,
         },
-        capabilities: vec![],
+        capabilities: login_capability_set(&current_login_capabilities()),
     };
     let result = negotiate_protocol_dry_run(&client_profile, &server_profile);
 
@@ -1088,4 +1091,12 @@ fn format_capabilities(capabilities: &[ProtocolCapability]) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+fn login_capability_set(capabilities: &LoginCapabilities) -> Vec<ProtocolCapability> {
+    let mut merged = capabilities.required.clone();
+    merged.extend(capabilities.optional.iter().cloned());
+    merged.sort();
+    merged.dedup();
+    merged
 }

@@ -2199,23 +2199,13 @@ mod tests {
     }
 
     fn valid_manifest() -> &'static str {
-        r#"name = "chat"
-version = "0.1.0"
-description = "Local chat resource"
-authors = ["MeowV Team"]
-license = "MIT"
-tags = ["chat", "example"]
-protocol_version = 1
-edition_compatibility = "any"
-platform_compatibility = "any"
-
-[entrypoints]
-server = "server/main.js"
-client = "client/main.js"
-
-[[dependencies]]
-name = "core_ui"
-"#
+        Box::leak(
+            format!(
+                "name = \"chat\"\nversion = \"0.1.0\"\ndescription = \"Local chat resource\"\nauthors = [\"MeowV Team\"]\nlicense = \"MIT\"\ntags = [\"chat\", \"example\"]\nprotocol_version = {}\nedition_compatibility = \"any\"\nplatform_compatibility = \"any\"\n\n[entrypoints]\nserver = \"server/main.js\"\nclient = \"client/main.js\"\n\n[[dependencies]]\nname = \"core_ui\"\n",
+                PROTOCOL_VERSION
+            )
+            .into_boxed_str(),
+        )
     }
 
     fn create_resource_dir(manifest: &str, files: &[(&PathBuf, &str)]) -> PathBuf {
@@ -2294,7 +2284,7 @@ name = "core_ui"
             .collect::<String>();
 
         format!(
-            "name = \"{name}\"\nversion = \"0.1.0\"\ndescription = \"Registry test\"\nauthors = [\"MeowV Team\"]\nlicense = \"MIT\"\ntags = [\"test\"]\nprotocol_version = 1\nedition_compatibility = \"any\"\n\n[entrypoints]\nserver = \"server/main.js\"\nclient = \"client/main.js\"{dependency_lines}\n"
+            "name = \"{name}\"\nversion = \"0.1.0\"\ndescription = \"Registry test\"\nauthors = [\"MeowV Team\"]\nlicense = \"MIT\"\ntags = [\"test\"]\nprotocol_version = {PROTOCOL_VERSION}\nedition_compatibility = \"any\"\n\n[entrypoints]\nserver = \"server/main.js\"\nclient = \"client/main.js\"{dependency_lines}\n"
         )
     }
 }

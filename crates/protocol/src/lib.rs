@@ -3,7 +3,7 @@ use std::fmt;
 use std::str::FromStr;
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
@@ -281,10 +281,14 @@ pub struct SignatureVerificationReport {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    Login { name: String, protocol_version: u32 },
+    Login {
+        name: String,
+        protocol_version: u32,
+        capabilities: LoginCapabilities,
+    },
     /// Heartbeat ping from client to server. Server should reply with Pong(sequence).
     Ping { sequence: u64 },
     /// Reply to a server-initiated ServerPing. Client echoes the sequence back.
@@ -293,6 +297,54 @@ pub enum ClientMessage {
     ServerPong { sequence: u64 },
     Chat { message: String },
     ResourceAvailabilityReport(ResourceAvailabilityReport),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoginCapabilities {
+    pub required: Vec<ProtocolCapability>,
+    pub optional: Vec<ProtocolCapability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_flags: Option<Vec<String>>,
+}
+
+impl LoginCapabilities {
+    pub fn normalize(&mut self) {
+        self.required.sort();
+        self.required.dedup();
+        self.optional.sort();
+        self.optional.dedup();
+
+        if let Some(flags) = self.feature_flags.as_mut() {
+            flags.sort();
+            flags.dedup();
+            if flags.is_empty() {
+                self.feature_flags = None;
+            }
+        }
+    }
+}
+
+pub fn current_login_capabilities() -> LoginCapabilities {
+    LoginCapabilities {
+        required: vec![
+            ProtocolCapability::ResourceAnnouncement,
+            ProtocolCapability::ResourceAvailabilityReport,
+        ],
+        optional: vec![
+            ProtocolCapability::JoinGateDryRun,
+            ProtocolCapability::ResourceCompatibilityReport,
+            ProtocolCapability::SignatureMetadata,
+        ],
+        feature_flags: None,
+    }
+}
+
+pub fn all_login_capabilities(capabilities: &LoginCapabilities) -> Vec<ProtocolCapability> {
+    let mut merged = capabilities.required.clone();
+    merged.extend(capabilities.optional.iter().cloned());
+    merged.sort();
+    merged.dedup();
+    merged
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -344,7 +396,11 @@ pub fn encode_line<T: Serialize>(value: &T) -> Result<String, serde_json::Error>
 }
 
 pub fn decode_client_line(line: &str) -> Result<ClientMessage, serde_json::Error> {
-    serde_json::from_str(line)
+    let mut message: ClientMessage = serde_json::from_str(line)?;
+    if let ClientMessage::Login { capabilities, .. } = &mut message {
+        capabilities.normalize();
+    }
+    Ok(message)
 }
 
 pub fn decode_server_line(line: &str) -> Result<ServerMessage, serde_json::Error> {
@@ -530,13 +586,7 @@ pub fn current_protocol_profile() -> ProtocolCompatibilityProfile {
             min: PROTOCOL_VERSION,
             max: PROTOCOL_VERSION,
         },
-        capabilities: vec![
-            ProtocolCapability::ResourceAnnouncement,
-            ProtocolCapability::ResourceAvailabilityReport,
-            ProtocolCapability::JoinGateDryRun,
-            ProtocolCapability::ResourceCompatibilityReport,
-            ProtocolCapability::SignatureMetadata,
-        ],
+        capabilities: all_login_capabilities(&current_login_capabilities()),
     }
 }
 
@@ -1145,13 +1195,36 @@ mod tests {
                 min: PROTOCOL_VERSION,
                 max: PROTOCOL_VERSION,
             },
-            capabilities: vec![
-                ProtocolCapability::ResourceAnnouncement,
+            capabilities: all_login_capabilities(&current_login_capabilities()),
+        }
+    }
+
+    fn sample_login_capabilities() -> LoginCapabilities {
+        LoginCapabilities {
+            required: vec![
                 ProtocolCapability::ResourceAvailabilityReport,
-                ProtocolCapability::JoinGateDryRun,
-                ProtocolCapability::ResourceCompatibilityReport,
-                ProtocolCapability::SignatureMetadata,
+                ProtocolCapability::ResourceAnnouncement,
             ],
+            optional: vec![
+                ProtocolCapability::SignatureMetadata,
+                ProtocolCapability::JoinGateDryRun,
+                ProtocolCapability::JoinGateDryRun,
+            ],
+            feature_flags: Some(vec![
+                "z_flag".to_string(),
+                "a_flag".to_string(),
+                "a_flag".to_string(),
+            ]),
+        }
+    }
+
+    fn sample_login() -> ClientMessage {
+        let mut capabilities = sample_login_capabilities();
+        capabilities.normalize();
+        ClientMessage::Login {
+            name: "alice".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+            capabilities,
         }
     }
 
@@ -1168,11 +1241,11 @@ mod tests {
     #[test]
     fn negotiate_compatible_dry_run_overlap() {
         let client = ProtocolCompatibilityProfile {
-            version_range: ProtocolVersionRange { min: 0, max: 2 },
+            version_range: ProtocolVersionRange { min: 0, max: 1 },
             capabilities: vec![ProtocolCapability::ResourceAnnouncement],
         };
         let server = ProtocolCompatibilityProfile {
-            version_range: ProtocolVersionRange { min: 2, max: 3 },
+            version_range: ProtocolVersionRange { min: 1, max: 1 },
             capabilities: vec![
                 ProtocolCapability::ResourceAnnouncement,
                 ProtocolCapability::JoinGateDryRun,
@@ -1180,7 +1253,7 @@ mod tests {
         };
         let result = negotiate_protocol_dry_run(&client, &server);
         assert_eq!(result.status, ProtocolNegotiationStatus::CompatibleDryRun);
-        assert_eq!(result.selected_version, Some(2));
+        assert_eq!(result.selected_version, Some(1));
         assert!(result.reason.contains("dry-run"));
     }
 
@@ -1311,6 +1384,129 @@ mod tests {
         );
         assert_eq!(result.status, ProtocolNegotiationStatus::ExactMatch);
         assert_eq!(result.selected_version, Some(PROTOCOL_VERSION));
+    }
+
+    #[test]
+    fn login_with_capability_payload_roundtrips() {
+        let json = encode_line(&sample_login()).unwrap();
+        let decoded = decode_client_line(&json).unwrap();
+        assert_eq!(decoded, sample_login());
+    }
+
+    #[test]
+    fn login_required_capabilities_roundtrip() {
+        let decoded = decode_client_line(
+            r#"{"type":"login","name":"alice","protocol_version":2,"capabilities":{"required":["resource_availability_report","resource_announcement"],"optional":[]}}"#,
+        )
+        .unwrap();
+        match decoded {
+            ClientMessage::Login { capabilities, .. } => {
+                assert_eq!(
+                    capabilities.required,
+                    vec![
+                        ProtocolCapability::ResourceAnnouncement,
+                        ProtocolCapability::ResourceAvailabilityReport,
+                    ]
+                );
+                assert!(capabilities.optional.is_empty());
+            }
+            other => panic!("expected login, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn login_optional_capabilities_roundtrip() {
+        let decoded = decode_client_line(
+            r#"{"type":"login","name":"alice","protocol_version":2,"capabilities":{"required":[],"optional":["signature_metadata","join_gate_dry_run"]}}"#,
+        )
+        .unwrap();
+        match decoded {
+            ClientMessage::Login { capabilities, .. } => {
+                assert!(capabilities.required.is_empty());
+                assert_eq!(
+                    capabilities.optional,
+                    vec![
+                        ProtocolCapability::JoinGateDryRun,
+                        ProtocolCapability::SignatureMetadata,
+                    ]
+                );
+            }
+            other => panic!("expected login, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn login_feature_flags_roundtrip() {
+        let decoded = decode_client_line(
+            r#"{"type":"login","name":"alice","protocol_version":2,"capabilities":{"required":[],"optional":[],"feature_flags":["z_flag","a_flag"]}}"#,
+        )
+        .unwrap();
+        match decoded {
+            ClientMessage::Login { capabilities, .. } => {
+                assert_eq!(
+                    capabilities.feature_flags,
+                    Some(vec!["a_flag".to_string(), "z_flag".to_string()])
+                );
+            }
+            other => panic!("expected login, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn login_unknown_typed_capability_rejected() {
+        let err = decode_client_line(
+            r#"{"type":"login","name":"alice","protocol_version":2,"capabilities":{"required":["future_capability"],"optional":[]}}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("future_capability"));
+    }
+
+    #[test]
+    fn login_unknown_feature_flags_are_tolerated() {
+        let decoded = decode_client_line(
+            r#"{"type":"login","name":"alice","protocol_version":2,"capabilities":{"required":[],"optional":[],"feature_flags":["future_experiment"]}}"#,
+        )
+        .unwrap();
+        match decoded {
+            ClientMessage::Login { capabilities, .. } => {
+                assert_eq!(
+                    capabilities.feature_flags,
+                    Some(vec!["future_experiment".to_string()])
+                );
+            }
+            other => panic!("expected login, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn login_capability_payload_normalized_deterministically() {
+        let decoded = decode_client_line(
+            r#"{"type":"login","name":"alice","protocol_version":2,"capabilities":{"required":["resource_availability_report","resource_announcement","resource_announcement"],"optional":["signature_metadata","join_gate_dry_run","join_gate_dry_run"],"feature_flags":["z_flag","a_flag","a_flag"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(decoded, sample_login());
+    }
+
+    #[test]
+    fn login_missing_capability_payload_rejected() {
+        let err = decode_client_line(
+            r#"{"type":"login","name":"alice","protocol_version":2}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("capabilities"));
+    }
+
+    #[test]
+    fn all_login_capabilities_merges_deterministically() {
+        assert_eq!(
+            all_login_capabilities(&sample_login_capabilities()),
+            vec![
+                ProtocolCapability::ResourceAnnouncement,
+                ProtocolCapability::ResourceAvailabilityReport,
+                ProtocolCapability::JoinGateDryRun,
+                ProtocolCapability::SignatureMetadata,
+            ]
+        );
     }
 
     fn sample_announcement(requirement_level: ResourceRequirementLevel) -> ResourceAnnouncement {
