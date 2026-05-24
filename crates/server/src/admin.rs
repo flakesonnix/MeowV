@@ -504,4 +504,25 @@ mod tests {
         let r2 = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
         assert_eq!(r1.message, r2.message);
     }
+
+    #[test]
+    fn sessions_shows_no_activity_heartbeat_label_for_new_session() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("heartbeat=no_activity"));
+    }
+
+    #[test]
+    fn sessions_shows_healthy_heartbeat_label_after_ping_pong() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 3, 3);
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("heartbeat=healthy"));
+    }
 }
