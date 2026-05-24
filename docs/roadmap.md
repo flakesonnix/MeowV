@@ -61,6 +61,20 @@
 | 4.13 | Heartbeat policy config plumbing — `[heartbeat]` TOML section; `HeartbeatSection` with `Default → ReportOnly`; policy threaded through registry snapshot, diagnostics, admin output, and `ServerRuntimeStatus`; no enforcement |
 | 4.14 | Strict heartbeat enforcement wiring — `ClientHeartbeatPolicy` enum; client-side `heartbeat_loop` enforces disconnect at threshold under `Strict`; `--heartbeat-policy` CLI flag; `enforcement_disconnect` field on `HeartbeatMetrics`; 7 new tests |
 | 4.15 | Heartbeat authority design — document why server-side enforcement is unreachable today; compare client-reported health vs server-initiated Ping; recommend server-initiated path for future enforcement; design doc only, no live changes |
+| 4.16 | Server-initiated heartbeat protocol stub — add `ServerMessage::ServerPing` and `ClientMessage::ServerPong` DTOs; server handler ignores `ServerPong` (inert); 8 round-trip tests; no timer, no enforcement |
+
+---
+
+## Milestone 4.16
+
+Server-initiated heartbeat protocol stub:
+
+- `ServerMessage::ServerPing { sequence: u64 }` — server-to-client authoritative liveness ping (inert)
+- `ClientMessage::ServerPong { sequence: u64 }` — client echo of `ServerPing` (inert)
+- Server `handle_client` logs received `ServerPong` at info level; no enforcement action
+- 8 protocol round-trip tests: `ServerPing` and `ServerPong` serialize/deserialize, sequence edge cases (0, u64::MAX), existing `Ping`/`Pong` unaffected, distinct serde `type` fields
+- No live server timer, no timeout tracking, no enforcement, no disconnect
+- Docs: `heartbeat-authority-design.md` updated; `client-heartbeat.md` updated with two-direction model
 
 ---
 

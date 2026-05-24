@@ -60,3 +60,25 @@ Client Enforcement (M4.14):
 - `--heartbeat-policy strict` enables enforcement; default is `report_only`.
 - Server-side labels (`heartbeat=<label>`) remain observational — server view always has `timeout_or_error=0` and cannot trigger `WouldDisconnectMissedHeartbeat` without client-reported data.
 - No protocol wire changes; registry cleanup on disconnect works via `SessionGuard` on all paths.
+
+Server-Initiated Heartbeat Protocol Stub (M4.16):
+
+Two heartbeat directions now exist in the protocol:
+
+| Direction | Ping message | Pong message | Owner | Purpose |
+|-----------|-------------|-------------|-------|---------|
+| Client-initiated | `ClientMessage::Ping { sequence }` | `ServerMessage::Pong { sequence }` | Client | Client diagnostics, manual liveness check |
+| Server-initiated | `ServerMessage::ServerPing { sequence }` | `ClientMessage::ServerPong { sequence }` | Server | Future authoritative liveness enforcement |
+
+Client-initiated direction (existing):
+- Client sends `Ping`, server echoes `Pong`.
+- Client tracks timeouts; `timeout_or_error_count` lives on client side only.
+- Server cannot enforce via this direction (server always has `timeout_or_error=0`).
+- `Strict` enforcement is client-side self-disconnect.
+
+Server-initiated direction (M4.16 stub — inert):
+- `ServerMessage::ServerPing { sequence: u64 }` and `ClientMessage::ServerPong { sequence: u64 }` added as inert DTOs.
+- Wire type tags: `"server_ping"` and `"server_pong"` — no collision with `"ping"` / `"pong"`.
+- Server handler arm logs receipt at `info` level; no timer, no enforcement, no tracking.
+- Future milestone (M4.17) will wire the server-side scheduler: server sends `ServerPing` on interval, tracks missed `ServerPong` replies, disconnects under `Strict` when threshold reached.
+- This is the authoritative liveness path: server owns the timer and measures directly — no trust assumption on client-reported data.
