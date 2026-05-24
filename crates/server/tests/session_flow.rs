@@ -35,7 +35,9 @@ async fn login_chat_and_snapshot_flow() -> Result<()> {
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
-                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
             .as_bytes(),
         )
         .await?;
@@ -132,7 +134,9 @@ async fn rejects_protocol_mismatch() -> Result<()> {
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "alice".to_string(),
-                protocol_version: PROTOCOL_VERSION + 1, capabilities: protocol::current_login_capabilities() })?
+                protocol_version: PROTOCOL_VERSION + 1,
+                capabilities: protocol::current_login_capabilities(),
+            })?
             .as_bytes(),
         )
         .await?;

@@ -82,8 +82,11 @@ impl SessionDiagnostics {
             pings_sent: self.server_ping_sent_count as u64,
             pongs_received: self.server_pong_received_count as u64,
         };
-        self.server_heartbeat_decision =
-            Some(evaluate_server_heartbeat(&server_input, policy).to_short_label().to_string());
+        self.server_heartbeat_decision = Some(
+            evaluate_server_heartbeat(&server_input, policy)
+                .to_short_label()
+                .to_string(),
+        );
         self
     }
 
@@ -110,10 +113,19 @@ impl SessionDiagnostics {
         }
         out.push('\n');
         out.push_str(&format!("event_count: {}\n", self.event_count));
-        out.push_str(&format!("ping_received_count: {}\n", self.ping_received_count));
+        out.push_str(&format!(
+            "ping_received_count: {}\n",
+            self.ping_received_count
+        ));
         out.push_str(&format!("pong_sent_count: {}\n", self.pong_sent_count));
-        out.push_str(&format!("server_ping_sent_count: {}\n", self.server_ping_sent_count));
-        out.push_str(&format!("server_pong_received_count: {}\n", self.server_pong_received_count));
+        out.push_str(&format!(
+            "server_ping_sent_count: {}\n",
+            self.server_ping_sent_count
+        ));
+        out.push_str(&format!(
+            "server_pong_received_count: {}\n",
+            self.server_pong_received_count
+        ));
         if let Some(hb) = &self.heartbeat_decision {
             out.push_str(&format!("{hb}\n"));
         }
@@ -174,7 +186,12 @@ impl SessionDiagnostics {
             optional_json_string(self.enforcement_decision.as_deref()),
             optional_json_string(self.heartbeat_decision.as_deref()),
             optional_json_string(self.server_heartbeat_decision.as_deref()),
-            optional_json_string(self.capability_negotiation.as_ref().map(|r| r.to_text()).as_deref()),
+            optional_json_string(
+                self.capability_negotiation
+                    .as_ref()
+                    .map(|r| r.to_text())
+                    .as_deref()
+            ),
         )
     }
 }

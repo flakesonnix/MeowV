@@ -1,12 +1,12 @@
 use base64::Engine as _;
 use ed25519_dalek::Signer;
 use protocol::signature_engine::{
-    evaluate_signature_policy, execute_verification_plan, TrustedPublicKey, SignaturePolicy,
+    SignaturePolicy, TrustedPublicKey, evaluate_signature_policy, execute_verification_plan,
 };
 use protocol::{
-    build_canonical_payload, build_signature_verification_plan, AnnouncedResource,
-    ResourceAnnouncement, ResourceAnnouncementSignature, ResourceRequirementLevel, TrustedKey,
-    PROTOCOL_VERSION,
+    AnnouncedResource, PROTOCOL_VERSION, ResourceAnnouncement, ResourceAnnouncementSignature,
+    ResourceRequirementLevel, TrustedKey, build_canonical_payload,
+    build_signature_verification_plan,
 };
 
 fn test_signing_key(seed: u8) -> ed25519_dalek::SigningKey {
@@ -83,10 +83,17 @@ fn e2e_signed_announcement_round_trip_verify() {
 
     let plan = build_signature_verification_plan(&deserialized, &key_identities, false);
     assert!(!plan.entries.is_empty(), "plan should have entries");
-    assert_eq!(plan.entries[0].action, protocol::SignatureVerificationAction::VerifySignature);
+    assert_eq!(
+        plan.entries[0].action,
+        protocol::SignatureVerificationAction::VerifySignature
+    );
 
     let report = execute_verification_plan(&deserialized, &plan, &trusted);
-    assert!(report.all_valid(), "report should be all_valid: {:?}", report);
+    assert!(
+        report.all_valid(),
+        "report should be all_valid: {:?}",
+        report
+    );
 
     assert!(evaluate_signature_policy(&report, &SignaturePolicy::ReportOnly).is_ok());
     assert!(evaluate_signature_policy(&report, &SignaturePolicy::Strict).is_ok());
@@ -110,7 +117,10 @@ fn e2e_tampered_announcement_rejected_under_strict() {
 
     let plan = build_signature_verification_plan(&deserialized, &key_identities, false);
     let report = execute_verification_plan(&deserialized, &plan, &trusted);
-    assert!(!report.all_valid(), "tampered announcement should not be valid");
+    assert!(
+        !report.all_valid(),
+        "tampered announcement should not be valid"
+    );
 
     assert!(evaluate_signature_policy(&report, &SignaturePolicy::ReportOnly).is_ok());
     assert!(evaluate_signature_policy(&report, &SignaturePolicy::Strict).is_err());

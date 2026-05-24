@@ -1,4 +1,4 @@
-use protocol::{encode_line, decode_client_line, decode_server_line};
+use protocol::{decode_client_line, decode_server_line, encode_line};
 
 #[test]
 fn ping_serde_roundtrip() {

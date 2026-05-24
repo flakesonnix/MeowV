@@ -10,16 +10,17 @@ mod shutdown;
 mod status;
 
 pub use config::{
-    AdminSection, ConfigError, DiagnosticsFormat, DiagnosticsSection, EnforcementSection,
-    HeartbeatSection, JoinGateConfigMode, JoinGateSection, LogFormat, LogLevel, LoggingSection,
-    CapabilityPolicy, ProtocolSection, ResourcesSection, ServerConfig, ServerSection,
+    AdminSection, CapabilityPolicy, ConfigError, DiagnosticsFormat, DiagnosticsSection,
+    EnforcementSection, HeartbeatSection, JoinGateConfigMode, JoinGateSection, LogFormat, LogLevel,
+    LoggingSection, ProtocolSection, ResourcesSection, ServerConfig, ServerSection,
     SignatureSection,
 };
 pub use enforcement::{SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement};
 pub use heartbeat_planner::{
-    HeartbeatDecision, HeartbeatPlannerInput, HeartbeatPolicy, MISSED_HEARTBEAT_DISCONNECT_THRESHOLD,
-    MISSED_SERVER_PONG_DISCONNECT_THRESHOLD, ServerHeartbeatDecision, ServerHeartbeatPlannerInput,
-    evaluate_heartbeat, evaluate_server_heartbeat,
+    HeartbeatDecision, HeartbeatPlannerInput, HeartbeatPolicy,
+    MISSED_HEARTBEAT_DISCONNECT_THRESHOLD, MISSED_SERVER_PONG_DISCONNECT_THRESHOLD,
+    ServerHeartbeatDecision, ServerHeartbeatPlannerInput, evaluate_heartbeat,
+    evaluate_server_heartbeat,
 };
 pub use session_registry::{
     SessionId, SessionRegistry, SessionRegistryEntry, SessionRegistrySnapshot,
@@ -337,45 +338,45 @@ async fn handle_client(
                 return Ok(());
             }
             Ok(message) => match message {
-            ClientMessage::Login {
-                name,
-                protocol_version,
-                capabilities,
-            } => {
-                if let Err(e) = session.on_hello_received() {
-                    session.fail(e.to_string());
-                    event_log.record(
-                        SessionEventKind::Failed,
-                        SessionState::Failed,
-                        format!("{e}"),
-                    );
-                    state.registry.lock().unwrap().update_session(
-                        &session_id,
-                        session.state().clone(),
-                        event_log.len(),
-                    );
-                    if config.diagnostics.print_session_diagnostics {
-                        let diag = SessionDiagnostics::from_parts(&session, &event_log)
-                            .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&config.heartbeat.policy);
-                        let text = match config.diagnostics.format {
-                            Fmt::Text => diag.to_text(),
-                            Fmt::JsonStub => diag.to_json_stub(),
-                        };
-                        info!(%client_id, "session diagnostics (failed):\n{text}");
-                    }
-                    send_direct(
-                        &mut writer_half,
-                        &ServerMessage::Disconnect {
-                            reason: DisconnectReason::InvalidHandshake,
-                            message: format!("session state error: {e}"),
-                        },
-                    )
-                    .await?;
-                    info!(%client_id, state = ?session.state(), "session: failed on hello transition");
-                    return Ok(());
-                } else {
-                    event_log.record(
+                ClientMessage::Login {
+                    name,
+                    protocol_version,
+                    capabilities,
+                } => {
+                    if let Err(e) = session.on_hello_received() {
+                        session.fail(e.to_string());
+                        event_log.record(
+                            SessionEventKind::Failed,
+                            SessionState::Failed,
+                            format!("{e}"),
+                        );
+                        state.registry.lock().unwrap().update_session(
+                            &session_id,
+                            session.state().clone(),
+                            event_log.len(),
+                        );
+                        if config.diagnostics.print_session_diagnostics {
+                            let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                .with_enforcement(&config.enforcement.mode)
+                                .with_heartbeat_policy(&config.heartbeat.policy);
+                            let text = match config.diagnostics.format {
+                                Fmt::Text => diag.to_text(),
+                                Fmt::JsonStub => diag.to_json_stub(),
+                            };
+                            info!(%client_id, "session diagnostics (failed):\n{text}");
+                        }
+                        send_direct(
+                            &mut writer_half,
+                            &ServerMessage::Disconnect {
+                                reason: DisconnectReason::InvalidHandshake,
+                                message: format!("session state error: {e}"),
+                            },
+                        )
+                        .await?;
+                        info!(%client_id, state = ?session.state(), "session: failed on hello transition");
+                        return Ok(());
+                    } else {
+                        event_log.record(
                         SessionEventKind::HelloReceived,
                         SessionState::HelloReceived,
                         format!(
@@ -389,38 +390,38 @@ async fn handle_client(
                                 .unwrap_or(0)
                         ),
                     );
-                    state.registry.lock().unwrap().update_session(
-                        &session_id,
-                        session.state().clone(),
-                        event_log.len(),
-                    );
-                    info!(%client_id, state = ?session.state(), "session: hello received");
-                }
+                        state.registry.lock().unwrap().update_session(
+                            &session_id,
+                            session.state().clone(),
+                            event_log.len(),
+                        );
+                        info!(%client_id, state = ?session.state(), "session: hello received");
+                    }
 
-                if let Err(_) = session.on_version_checked(protocol_version) {
-                    event_log.record(
+                    if let Err(_) = session.on_version_checked(protocol_version) {
+                        event_log.record(
                         SessionEventKind::Failed,
                         SessionState::Failed,
                         format!(
                             "protocol mismatch: client={protocol_version} server={PROTOCOL_VERSION}"
                         ),
                     );
-                    state.registry.lock().unwrap().update_session(
-                        &session_id,
-                        session.state().clone(),
-                        event_log.len(),
-                    );
-                    if config.diagnostics.print_session_diagnostics {
-                        let diag = SessionDiagnostics::from_parts(&session, &event_log)
-                            .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&config.heartbeat.policy);
-                        let text = match config.diagnostics.format {
-                            Fmt::Text => diag.to_text(),
-                            Fmt::JsonStub => diag.to_json_stub(),
-                        };
-                        info!(%client_id, "session diagnostics (failed):\n{text}");
-                    }
-                    send_direct(
+                        state.registry.lock().unwrap().update_session(
+                            &session_id,
+                            session.state().clone(),
+                            event_log.len(),
+                        );
+                        if config.diagnostics.print_session_diagnostics {
+                            let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                .with_enforcement(&config.enforcement.mode)
+                                .with_heartbeat_policy(&config.heartbeat.policy);
+                            let text = match config.diagnostics.format {
+                                Fmt::Text => diag.to_text(),
+                                Fmt::JsonStub => diag.to_json_stub(),
+                            };
+                            info!(%client_id, "session diagnostics (failed):\n{text}");
+                        }
+                        send_direct(
                         &mut writer_half,
                         &ServerMessage::Disconnect {
                             reason: DisconnectReason::ProtocolMismatch,
@@ -430,120 +431,123 @@ async fn handle_client(
                         },
                     )
                     .await?;
-                    info!(%client_id, state = ?session.state(), "session: failed on version mismatch");
-                    return Ok(());
-                }
-                event_log.record(
-                    SessionEventKind::VersionChecked,
-                    SessionState::VersionChecked,
-                    format!("protocol version {protocol_version} matched"),
-                );
-                {
-                    let mut reg = state.registry.lock().unwrap();
-                    reg.set_protocol_version(&session_id, protocol_version);
-                    reg.set_login_capabilities(&session_id, capabilities.clone());
-                    reg.update_session(&session_id, session.state().clone(), event_log.len());
-                }
-                info!(%client_id, state = ?session.state(), "session: version checked");
-
-                let server_profile = current_protocol_profile();
-                let client_profile = ProtocolCompatibilityProfile {
-                    version_range: ProtocolVersionRange {
-                        min: protocol_version,
-                        max: protocol_version,
-                    },
-                    capabilities: all_login_capabilities(&capabilities),
-                };
-                let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
-                let caps = shared_capabilities(&client_profile, &server_profile);
-                let capability_policy = current_capability_negotiation_policy();
-                let capability_negotiation =
-                    evaluate_capability_negotiation(&capabilities, &capability_policy);
-                info!(
-                    client_version = protocol_version,
-                    server_version = PROTOCOL_VERSION,
-                    required_capability_count = capabilities.required.len(),
-                    optional_capability_count = capabilities.optional.len(),
-                    feature_flag_count = capabilities.feature_flags.as_ref().map(|flags| flags.len()).unwrap_or(0),
-                    negotiation_status = ?negotiation.status,
-                    capability_negotiation = capability_negotiation.decision.to_text(),
-                    capability_warning_count = capability_negotiation.warnings.len(),
-                    capability_violation_count = capability_negotiation.violations.len(),
-                    shared_capability_count = caps.len(),
-                    "protocol handshake: exact-match policy active, negotiation dry-run computed"
-                );
-                if negotiation.status != ProtocolNegotiationStatus::ExactMatch {
-                    info!(
-                        client_version = protocol_version,
-                        server_version = PROTOCOL_VERSION,
-                        reason = %negotiation.reason,
-                        "protocol negotiation dry-run: non-exact overlap detected"
-                    );
-                }
-                if config.protocol.capability_policy == CapabilityPolicy::Strict
-                    && capability_negotiation.decision
-                        == protocol::CapabilityNegotiationDecision::WouldReject
-                {
-                    let reason = capability_negotiation
-                        .violations
-                        .first()
-                        .map(|violation| violation.to_text())
-                        .unwrap_or_else(|| {
-                            "capability negotiation rejected under strict policy".to_string()
-                        });
-                    session.fail(reason.clone());
+                        info!(%client_id, state = ?session.state(), "session: failed on version mismatch");
+                        return Ok(());
+                    }
                     event_log.record(
-                        SessionEventKind::Failed,
-                        SessionState::Failed,
-                        format!("capability enforcement: {reason}"),
+                        SessionEventKind::VersionChecked,
+                        SessionState::VersionChecked,
+                        format!("protocol version {protocol_version} matched"),
                     );
                     {
                         let mut reg = state.registry.lock().unwrap();
-                        reg.set_capability_negotiation(&session_id, capability_negotiation.clone());
-                        reg.update_session(&session_id, SessionState::Failed, event_log.len());
+                        reg.set_protocol_version(&session_id, protocol_version);
+                        reg.set_login_capabilities(&session_id, capabilities.clone());
+                        reg.update_session(&session_id, session.state().clone(), event_log.len());
                     }
-                    if config.diagnostics.print_session_diagnostics {
-                        let diag = SessionDiagnostics::from_parts(&session, &event_log)
-                            .with_capability_negotiation(&capability_negotiation)
-                            .with_enforcement(&config.enforcement.mode)
-                            .with_heartbeat_policy(&config.heartbeat.policy);
-                        let text = match config.diagnostics.format {
-                            Fmt::Text => diag.to_text(),
-                            Fmt::JsonStub => diag.to_json_stub(),
-                        };
-                        info!(%client_id, "session diagnostics (capability strict reject):\n{text}");
-                    }
-                    send_direct(
-                        &mut writer_half,
-                        &ServerMessage::Disconnect {
-                            reason: DisconnectReason::InvalidHandshake,
-                            message: format!("capability policy strict reject: {reason}"),
+                    info!(%client_id, state = ?session.state(), "session: version checked");
+
+                    let server_profile = current_protocol_profile();
+                    let client_profile = ProtocolCompatibilityProfile {
+                        version_range: ProtocolVersionRange {
+                            min: protocol_version,
+                            max: protocol_version,
                         },
-                    )
-                    .await?;
-                    info!(%client_id, reason = %reason, "session: strict capability policy rejected login");
-                    return Ok(());
-                }
-                if let Err(e) = session.on_negotiation_logged() {
-                    warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
-                    if config.enforcement.mode == SessionEnforcementPolicy::Strict {
-                        session.fail(format!("negotiation transition failed: {e}"));
-                        if handle_enforcement(
-                            &session,
-                            &mut event_log,
-                            &session_id,
-                            &state.registry,
-                            &config,
-                            client_id,
-                            &mut writer_half,
-                        )
-                        .await?
-                        {
-                            return Ok(());
-                        }
+                        capabilities: all_login_capabilities(&capabilities),
+                    };
+                    let negotiation = negotiate_protocol_dry_run(&client_profile, &server_profile);
+                    let caps = shared_capabilities(&client_profile, &server_profile);
+                    let capability_policy = current_capability_negotiation_policy();
+                    let capability_negotiation =
+                        evaluate_capability_negotiation(&capabilities, &capability_policy);
+                    info!(
+                        client_version = protocol_version,
+                        server_version = PROTOCOL_VERSION,
+                        required_capability_count = capabilities.required.len(),
+                        optional_capability_count = capabilities.optional.len(),
+                        feature_flag_count = capabilities.feature_flags.as_ref().map(|flags| flags.len()).unwrap_or(0),
+                        negotiation_status = ?negotiation.status,
+                        capability_negotiation = capability_negotiation.decision.to_text(),
+                        capability_warning_count = capability_negotiation.warnings.len(),
+                        capability_violation_count = capability_negotiation.violations.len(),
+                        shared_capability_count = caps.len(),
+                        "protocol handshake: exact-match policy active, negotiation dry-run computed"
+                    );
+                    if negotiation.status != ProtocolNegotiationStatus::ExactMatch {
+                        info!(
+                            client_version = protocol_version,
+                            server_version = PROTOCOL_VERSION,
+                            reason = %negotiation.reason,
+                            "protocol negotiation dry-run: non-exact overlap detected"
+                        );
                     }
-                } else {
-                    event_log.record(
+                    if config.protocol.capability_policy == CapabilityPolicy::Strict
+                        && capability_negotiation.decision
+                            == protocol::CapabilityNegotiationDecision::WouldReject
+                    {
+                        let reason = capability_negotiation
+                            .violations
+                            .first()
+                            .map(|violation| violation.to_text())
+                            .unwrap_or_else(|| {
+                                "capability negotiation rejected under strict policy".to_string()
+                            });
+                        session.fail(reason.clone());
+                        event_log.record(
+                            SessionEventKind::Failed,
+                            SessionState::Failed,
+                            format!("capability enforcement: {reason}"),
+                        );
+                        {
+                            let mut reg = state.registry.lock().unwrap();
+                            reg.set_capability_negotiation(
+                                &session_id,
+                                capability_negotiation.clone(),
+                            );
+                            reg.update_session(&session_id, SessionState::Failed, event_log.len());
+                        }
+                        if config.diagnostics.print_session_diagnostics {
+                            let diag = SessionDiagnostics::from_parts(&session, &event_log)
+                                .with_capability_negotiation(&capability_negotiation)
+                                .with_enforcement(&config.enforcement.mode)
+                                .with_heartbeat_policy(&config.heartbeat.policy);
+                            let text = match config.diagnostics.format {
+                                Fmt::Text => diag.to_text(),
+                                Fmt::JsonStub => diag.to_json_stub(),
+                            };
+                            info!(%client_id, "session diagnostics (capability strict reject):\n{text}");
+                        }
+                        send_direct(
+                            &mut writer_half,
+                            &ServerMessage::Disconnect {
+                                reason: DisconnectReason::InvalidHandshake,
+                                message: format!("capability policy strict reject: {reason}"),
+                            },
+                        )
+                        .await?;
+                        info!(%client_id, reason = %reason, "session: strict capability policy rejected login");
+                        return Ok(());
+                    }
+                    if let Err(e) = session.on_negotiation_logged() {
+                        warn!(%client_id, error = %e, "session: unexpected negotiation transition error");
+                        if config.enforcement.mode == SessionEnforcementPolicy::Strict {
+                            session.fail(format!("negotiation transition failed: {e}"));
+                            if handle_enforcement(
+                                &session,
+                                &mut event_log,
+                                &session_id,
+                                &state.registry,
+                                &config,
+                                client_id,
+                                &mut writer_half,
+                            )
+                            .await?
+                            {
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        event_log.record(
                         SessionEventKind::ProtocolNegotiationDryRun,
                         SessionState::NegotiationDryRunLogged,
                         format!(
@@ -553,32 +557,33 @@ async fn handle_client(
                             capability_negotiation.violations.len()
                         ),
                     );
-                    state.registry.lock().unwrap().set_capability_negotiation(
-                        &session_id,
-                        capability_negotiation.clone(),
-                    );
-                    state.registry.lock().unwrap().update_session(
-                        &session_id,
-                        session.state().clone(),
-                        event_log.len(),
-                    );
-                    info!(%client_id, state = ?session.state(), "session: negotiation logged");
-                }
+                        state.registry.lock().unwrap().set_capability_negotiation(
+                            &session_id,
+                            capability_negotiation.clone(),
+                        );
+                        state.registry.lock().unwrap().update_session(
+                            &session_id,
+                            session.state().clone(),
+                            event_log.len(),
+                        );
+                        info!(%client_id, state = ?session.state(), "session: negotiation logged");
+                    }
 
-                (name, caps, capability_negotiation)
-            }
-            _ => {
-                send_direct(
-                    &mut writer_half,
-                    &ServerMessage::Disconnect {
-                        reason: DisconnectReason::InvalidHandshake,
-                        message: "first packet must be login".to_string(),
-                    },
-                )
-                .await?;
-                return Ok(());
-            }
-        }},
+                    (name, caps, capability_negotiation)
+                }
+                _ => {
+                    send_direct(
+                        &mut writer_half,
+                        &ServerMessage::Disconnect {
+                            reason: DisconnectReason::InvalidHandshake,
+                            message: "first packet must be login".to_string(),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            },
+        },
         None => return Ok(()),
     };
 
@@ -701,13 +706,10 @@ async fn handle_client(
 
     // Server-initiated heartbeat scheduler.
     let srv_ping_enabled = config.heartbeat.server_ping_interval_ms > 0;
-    let srv_ping_dur =
-        Duration::from_millis(config.heartbeat.server_ping_interval_ms.max(1));
+    let srv_ping_dur = Duration::from_millis(config.heartbeat.server_ping_interval_ms.max(1));
     // interval_at schedules the first tick at now+dur, avoiding the immediate t=0 fire.
-    let mut srv_ping_interval = time::interval_at(
-        time::Instant::now() + srv_ping_dur,
-        srv_ping_dur,
-    );
+    let mut srv_ping_interval =
+        time::interval_at(time::Instant::now() + srv_ping_dur, srv_ping_dur);
     srv_ping_interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
     let mut srv_ping_sequence: u64 = 1;
 
@@ -1155,10 +1157,9 @@ async fn handle_enforcement(
             if config.diagnostics.print_session_diagnostics
                 && *session.state() == SessionState::Failed
             {
-                let diag =
-                    SessionDiagnostics::from_parts(session, event_log)
-                        .with_enforcement(policy)
-                        .with_heartbeat_policy(&config.heartbeat.policy);
+                let diag = SessionDiagnostics::from_parts(session, event_log)
+                    .with_enforcement(policy)
+                    .with_heartbeat_policy(&config.heartbeat.policy);
                 let text = match config.diagnostics.format {
                     Fmt::Text => diag.to_text(),
                     Fmt::JsonStub => diag.to_json_stub(),
@@ -1184,10 +1185,9 @@ async fn handle_enforcement(
             }
 
             if config.diagnostics.print_session_diagnostics {
-                let diag =
-                    SessionDiagnostics::from_parts(session, event_log)
-                        .with_enforcement(policy)
-                        .with_heartbeat_policy(&config.heartbeat.policy);
+                let diag = SessionDiagnostics::from_parts(session, event_log)
+                    .with_enforcement(policy)
+                    .with_heartbeat_policy(&config.heartbeat.policy);
                 let text = match config.diagnostics.format {
                     Fmt::Text => diag.to_text(),
                     Fmt::JsonStub => diag.to_json_stub(),

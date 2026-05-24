@@ -160,9 +160,10 @@ mod tests {
         );
 
         let err = LocalJsonServerListSource::new(&path).load().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("current_players exceeds max_players"));
+        assert!(
+            err.to_string()
+                .contains("current_players exceeds max_players")
+        );
     }
 
     #[test]

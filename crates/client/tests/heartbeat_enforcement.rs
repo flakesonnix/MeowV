@@ -1,9 +1,9 @@
 use anyhow::Result;
-use protocol::{ClientMessage, ServerMessage, PROTOCOL_VERSION, decode_client_line, encode_line};
+use protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage, decode_client_line, encode_line};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 /// Start a TCP server that handles the login handshake but never responds to Pings.
 /// Returns the bound address. The server task runs until the connection closes.
@@ -101,7 +101,9 @@ async fn login_and_consume_handshake(
         .write_all(
             encode_line(&ClientMessage::Login {
                 name: "enforcer".to_string(),
-                protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
             .as_bytes(),
         )
         .await?;

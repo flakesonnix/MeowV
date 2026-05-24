@@ -1,12 +1,12 @@
 use anyhow::Result;
-use tokio::io::Lines;
-use tokio::io::BufReader;
 use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
+use tokio::io::Lines;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
-use protocol::{ClientMessage, ServerMessage, encode_line, decode_server_line};
+use protocol::{ClientMessage, ServerMessage, decode_server_line, encode_line};
 
 /// Send a Ping with the given sequence and await a matching Pong.
 /// This helper performs one request/response exchange and returns when the matching
@@ -35,7 +35,9 @@ pub async fn send_ping_and_wait_with_timeout(
 
     // Wait for matching Pong within timeout_dur
     loop {
-        let line = timeout(timeout_dur, reader.next_line()).await??.expect("stream closed");
+        let line = timeout(timeout_dur, reader.next_line())
+            .await??
+            .expect("stream closed");
         let packet = decode_server_line(&line)?;
         match packet {
             ServerMessage::Pong { sequence: got } if got == sequence => return Ok(()),

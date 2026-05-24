@@ -1,8 +1,8 @@
 use anyhow::Result;
+use protocol::{ClientMessage, ServerMessage, decode_client_line, encode_line};
 use std::sync::Arc;
-use tokio::{net::TcpListener, sync::Mutex as AsyncMutex, time::sleep};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use protocol::{decode_client_line, encode_line, ClientMessage, ServerMessage};
+use tokio::{net::TcpListener, sync::Mutex as AsyncMutex, time::sleep};
 
 // Test that heartbeat sequence numbers increment monotonically.
 #[tokio::test]
@@ -23,8 +23,19 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
         if let Ok(Some(line)) = lines.next_line().await {
             let _ = decode_client_line(&line).expect("decode login");
             // send Welcome and Announcement
-            let welcome = encode_line(&ServerMessage::Welcome { client_id: uuid::Uuid::new_v4(), motd: "ok".to_string(), protocol_version: 1 }).unwrap();
-            let announcement = encode_line(&ServerMessage::ResourceAnnouncement(protocol::ResourceAnnouncement { resources: vec![], signature: None })).unwrap();
+            let welcome = encode_line(&ServerMessage::Welcome {
+                client_id: uuid::Uuid::new_v4(),
+                motd: "ok".to_string(),
+                protocol_version: 1,
+            })
+            .unwrap();
+            let announcement = encode_line(&ServerMessage::ResourceAnnouncement(
+                protocol::ResourceAnnouncement {
+                    resources: vec![],
+                    signature: None,
+                },
+            ))
+            .unwrap();
             let _ = w.write_all(welcome.as_bytes()).await;
             let _ = w.write_all(announcement.as_bytes()).await;
         }
@@ -48,7 +59,16 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // send login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "cli".to_string(), protocol_version: 1, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            encode_line(&ClientMessage::Login {
+                name: "cli".to_string(),
+                protocol_version: 1,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // consume server welcome/announcement
     let _ = lines.next_line().await?;
@@ -61,7 +81,15 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(20), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
+        client::heartbeat_loop(
+            hb_writer,
+            hb_lines,
+            tokio::time::Duration::from_millis(30),
+            tokio::time::Duration::from_millis(20),
+            stop_rx,
+            client::ClientHeartbeatPolicy::ReportOnly,
+        )
+        .await
     });
 
     // let a few pings happen
@@ -71,7 +99,11 @@ async fn heartbeat_loop_sequence_numbers_increment() -> Result<()> {
 
     // check seen sequences
     let seqs = seen.lock().await.clone();
-    assert!(seqs.len() >= 3, "expected at least 3 pings, got {}", seqs.len());
+    assert!(
+        seqs.len() >= 3,
+        "expected at least 3 pings, got {}",
+        seqs.len()
+    );
     // ensure monotonic increment starting at 1
     for (i, s) in seqs.iter().enumerate() {
         assert_eq!(*s, (i as u64) + 1);
@@ -126,7 +158,16 @@ async fn heartbeat_loop_timeout_continues_without_disconnect() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // send login
-    writer_half.write_all(encode_line(&ClientMessage::Login { name: "cli".to_string(), protocol_version: 1, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            encode_line(&ClientMessage::Login {
+                name: "cli".to_string(),
+                protocol_version: 1,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // don't rely on server welcome; proceed
 
@@ -137,7 +178,15 @@ async fn heartbeat_loop_timeout_continues_without_disconnect() -> Result<()> {
     let hb_writer = writer.clone();
     let hb_lines = lines_arc.clone();
     let handle = tokio::spawn(async move {
-        client::heartbeat_loop(hb_writer, hb_lines, tokio::time::Duration::from_millis(30), tokio::time::Duration::from_millis(10), stop_rx, client::ClientHeartbeatPolicy::ReportOnly).await
+        client::heartbeat_loop(
+            hb_writer,
+            hb_lines,
+            tokio::time::Duration::from_millis(30),
+            tokio::time::Duration::from_millis(10),
+            stop_rx,
+            client::ClientHeartbeatPolicy::ReportOnly,
+        )
+        .await
     });
 
     // let a few pings happen
@@ -147,7 +196,11 @@ async fn heartbeat_loop_timeout_continues_without_disconnect() -> Result<()> {
 
     // ensure multiple pings recorded despite no pongs
     let seqs = seen.lock().await.clone();
-    assert!(seqs.len() >= 2, "expected at least 2 pings recorded, got {}", seqs.len());
+    assert!(
+        seqs.len() >= 2,
+        "expected at least 2 pings recorded, got {}",
+        seqs.len()
+    );
     assert!(metrics.sent_count >= 2);
     assert_eq!(metrics.pong_count, 0);
     assert!(metrics.timeout_or_error_count >= 2);

@@ -4,8 +4,8 @@ use std::path::Path;
 use crate::enforcement::SessionEnforcementPolicy;
 use crate::heartbeat_planner::HeartbeatPolicy;
 use anyhow::Context;
-use protocol::signature_engine::SignaturePolicy;
 use protocol::PROTOCOL_VERSION;
+use protocol::signature_engine::SignaturePolicy;
 use serde::Deserialize;
 
 /// Error from [`ServerConfig::validate`].

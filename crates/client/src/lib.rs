@@ -1,21 +1,21 @@
 // Library facade for the client crate so integration tests can access helpers.
 pub mod heartbeat;
 
+use anyhow::Context;
 use anyhow::Result;
 use protocol::decode_server_line;
+use protocol::{
+    ResourceAnnouncement, ResourceAvailabilityEntry, ResourceAvailabilityReport,
+    ResourceAvailabilityStatus, check_announcement_signature_stub, evaluate_resource_policy,
+};
+use resource_manifest::{CacheFileStatus, verify_cache_for_resource};
 use std::fmt;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{BufReader, Lines};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Duration;
-use anyhow::Context;
-use protocol::{
-    ResourceAnnouncement, ResourceAvailabilityEntry, ResourceAvailabilityReport,
-    ResourceAvailabilityStatus, check_announcement_signature_stub, evaluate_resource_policy,
-};
-use resource_manifest::{verify_cache_for_resource, CacheFileStatus};
-use std::path::Path;
 
 /// Deterministic, report-only resource download preflight planner helper.
 /// Mirrors CLI behavior. Does not perform network I/O or cache writes.
@@ -26,8 +26,8 @@ pub fn get_resource_download_preflight_plan_text(
 ) -> Result<String> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read announcement file: {path}"))?;
-    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
-        .context("failed to parse ResourceAnnouncement JSON")?;
+    let announcement: ResourceAnnouncement =
+        serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
 
     // Simple flag parser for tests/CLI-like calls
     fn read_flag(args: &[String], name: &str) -> Option<String> {
@@ -39,9 +39,9 @@ pub fn get_resource_download_preflight_plan_text(
     // Enforce signature policy CLI semantics: strict requires trusted keys path
     let has_trusted_keys = read_flag(args, "--trusted-keys").is_some();
     match policy {
-        protocol::signature_engine::SignaturePolicy::Strict if !has_trusted_keys => anyhow::bail!(
-            "--signature-policy strict requires --trusted-keys <path>"
-        ),
+        protocol::signature_engine::SignaturePolicy::Strict if !has_trusted_keys => {
+            anyhow::bail!("--signature-policy strict requires --trusted-keys <path>")
+        }
         _ => {}
     }
 
@@ -108,8 +108,8 @@ pub fn get_resource_download_preflight_plan_json(
 ) -> Result<String> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read announcement file: {path}"))?;
-    let announcement: ResourceAnnouncement = serde_json::from_str(&raw)
-        .context("failed to parse ResourceAnnouncement JSON")?;
+    let announcement: ResourceAnnouncement =
+        serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
 
     // Simple flag parser for tests/CLI-like calls
     fn read_flag(args: &[String], name: &str) -> Option<String> {
@@ -121,9 +121,9 @@ pub fn get_resource_download_preflight_plan_json(
     // Enforce signature policy CLI semantics: strict requires trusted keys path
     let has_trusted_keys = read_flag(args, "--trusted-keys").is_some();
     match policy {
-        protocol::signature_engine::SignaturePolicy::Strict if !has_trusted_keys => anyhow::bail!(
-            "--signature-policy strict requires --trusted-keys <path>"
-        ),
+        protocol::signature_engine::SignaturePolicy::Strict if !has_trusted_keys => {
+            anyhow::bail!("--signature-policy strict requires --trusted-keys <path>")
+        }
         _ => {}
     }
 
@@ -244,7 +244,9 @@ impl fmt::Display for HeartbeatMetrics {
 }
 
 fn optional_sequence_text(value: Option<u64>) -> String {
-    value.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string())
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Start a periodic heartbeat loop that sends pings at `interval` and waits for
@@ -320,20 +322,20 @@ pub async fn perform_ping_once(
         let _ = decode_server_line(&line)?;
     }
 
-    crate::heartbeat::send_ping_and_wait_with_timeout(writer, reader_lines, sequence, timeout).await?;
+    crate::heartbeat::send_ping_and_wait_with_timeout(writer, reader_lines, sequence, timeout)
+        .await?;
     Ok(())
 }
 
 /// Reply to a server-initiated ServerPing by sending ClientMessage::ServerPong
 /// with the same sequence number. This is the client's half of the authoritative
 /// liveness path added in M4.16/M4.17.
-pub async fn handle_server_ping(
-    writer: &mut OwnedWriteHalf,
-    sequence: u64,
-) -> anyhow::Result<()> {
+pub async fn handle_server_ping(writer: &mut OwnedWriteHalf, sequence: u64) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt as _;
     writer
-        .write_all(protocol::encode_line(&protocol::ClientMessage::ServerPong { sequence })?.as_bytes())
+        .write_all(
+            protocol::encode_line(&protocol::ClientMessage::ServerPong { sequence })?.as_bytes(),
+        )
         .await?;
     Ok(())
 }

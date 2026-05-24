@@ -1,5 +1,5 @@
 use anyhow::Result;
-use protocol::{ClientMessage, ServerMessage, PROTOCOL_VERSION, decode_client_line, encode_line};
+use protocol::{ClientMessage, PROTOCOL_VERSION, ServerMessage, decode_client_line, encode_line};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::Duration;
@@ -18,7 +18,9 @@ async fn connect_and_handshake(
     w.write_all(
         encode_line(&ClientMessage::Login {
             name: "test".to_string(),
-            protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: protocol::current_login_capabilities(),
+        })?
         .as_bytes(),
     )
     .await?;
@@ -139,7 +141,10 @@ async fn server_ping_handled_while_waiting_for_heartbeat_pong() -> Result<()> {
         })
         .unwrap();
         let announcement = encode_line(&ServerMessage::ResourceAnnouncement(
-            protocol::ResourceAnnouncement { resources: vec![], signature: None },
+            protocol::ResourceAnnouncement {
+                resources: vec![],
+                signature: None,
+            },
         ))
         .unwrap();
         let _ = w.write_all(welcome.as_bytes()).await;
@@ -206,7 +211,10 @@ async fn unrelated_server_messages_not_disrupted_by_server_ping() -> Result<()> 
         })
         .unwrap();
         let announcement = encode_line(&ServerMessage::ResourceAnnouncement(
-            protocol::ResourceAnnouncement { resources: vec![], signature: None },
+            protocol::ResourceAnnouncement {
+                resources: vec![],
+                signature: None,
+            },
         ))
         .unwrap();
         w.write_all(welcome.as_bytes()).await.unwrap();

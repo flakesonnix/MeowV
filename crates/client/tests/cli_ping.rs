@@ -1,15 +1,20 @@
 // std::process::Command previously used for an integration-style test; keep commented to avoid warnings
 // use std::process::Command;
 use anyhow::Result;
-use tokio::{net::TcpListener, sync::oneshot};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use protocol::{PROTOCOL_VERSION};
-use server::{run_with_listener_and_state, ServerConfig, ServerSection, SharedState};
+use protocol::PROTOCOL_VERSION;
+use server::{ServerConfig, ServerSection, SharedState, run_with_listener_and_state};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::{net::TcpListener, sync::oneshot};
 
 fn server_config(addr: &str) -> ServerConfig {
     ServerConfig {
-        server: ServerSection { bind_addr: addr.to_string(), tick_rate: 20, motd: "cli ping test".to_string(), ..ServerSection::default() },
+        server: ServerSection {
+            bind_addr: addr.to_string(),
+            tick_rate: 20,
+            motd: "cli ping test".to_string(),
+            ..ServerSection::default()
+        },
         ..ServerConfig::default()
     }
 }
@@ -29,10 +34,25 @@ async fn cli_ping_once_success() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // Send Login
-    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "cli-test".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            protocol::encode_line(&protocol::ClientMessage::Login {
+                name: "cli-test".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // Use client library helper
-    client::perform_ping_once(&mut writer_half, &mut lines, 1, tokio::time::Duration::from_secs(2)).await?;
+    client::perform_ping_once(
+        &mut writer_half,
+        &mut lines,
+        1,
+        tokio::time::Duration::from_secs(2),
+    )
+    .await?;
 
     server_task.abort();
     Ok(())
@@ -52,8 +72,20 @@ async fn cli_ping_once_timeout() -> Result<()> {
             let mut reader = tokio::io::BufReader::new(r).lines();
             if let Ok(Some(_line)) = reader.next_line().await {
                 // send Welcome and Announcement
-                let welcome = protocol::encode_line(&protocol::ServerMessage::Welcome { client_id: uuid::Uuid::new_v4(), motd: "no-pong".to_string(), protocol_version: PROTOCOL_VERSION }).unwrap();
-                let announcement = protocol::encode_line(&protocol::ServerMessage::ResourceAnnouncement(protocol::ResourceAnnouncement { resources: vec![], signature: None })).unwrap();
+                let welcome = protocol::encode_line(&protocol::ServerMessage::Welcome {
+                    client_id: uuid::Uuid::new_v4(),
+                    motd: "no-pong".to_string(),
+                    protocol_version: PROTOCOL_VERSION,
+                })
+                .unwrap();
+                let announcement =
+                    protocol::encode_line(&protocol::ServerMessage::ResourceAnnouncement(
+                        protocol::ResourceAnnouncement {
+                            resources: vec![],
+                            signature: None,
+                        },
+                    ))
+                    .unwrap();
                 let _ = w.write_all(welcome.as_bytes()).await;
                 let _ = w.write_all(announcement.as_bytes()).await;
             }
@@ -70,11 +102,29 @@ async fn cli_ping_once_timeout() -> Result<()> {
     let mut lines = tokio::io::BufReader::new(reader_half).lines();
 
     // Send Login
-    writer_half.write_all(protocol::encode_line(&protocol::ClientMessage::Login { name: "cli-test".to_string(), protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?.as_bytes()).await?;
+    writer_half
+        .write_all(
+            protocol::encode_line(&protocol::ClientMessage::Login {
+                name: "cli-test".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: protocol::current_login_capabilities(),
+            })?
+            .as_bytes(),
+        )
+        .await?;
 
     // Use client library helper with short timeout
-    let res = client::perform_ping_once(&mut writer_half, &mut lines, 99, tokio::time::Duration::from_millis(50)).await;
-    assert!(res.is_err(), "expected timeout/failure when server does not respond");
+    let res = client::perform_ping_once(
+        &mut writer_half,
+        &mut lines,
+        99,
+        tokio::time::Duration::from_millis(50),
+    )
+    .await;
+    assert!(
+        res.is_err(),
+        "expected timeout/failure when server does not respond"
+    );
 
     server_task.abort();
     Ok(())

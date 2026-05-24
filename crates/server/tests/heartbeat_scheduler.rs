@@ -4,7 +4,10 @@ use protocol::{
     ResourceAvailabilityReport, ResourceAvailabilityStatus, ServerMessage, decode_server_line,
     encode_line,
 };
-use server::{HeartbeatSection, HeartbeatPolicy, ServerConfig, ServerSection, SharedState, run_with_listener_and_state};
+use server::{
+    HeartbeatPolicy, HeartbeatSection, ServerConfig, ServerSection, SharedState,
+    run_with_listener_and_state,
+};
 use std::sync::Arc;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -39,9 +42,7 @@ where
 }
 
 /// Read packets until ServerPing is found, skipping EntitySnapshot/ChatBroadcast/Pong.
-async fn read_until_server_ping<R>(
-    lines: &mut tokio::io::Lines<BufReader<R>>,
-) -> Result<u64>
+async fn read_until_server_ping<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> Result<u64>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -73,13 +74,18 @@ async fn connect_and_complete_handshake(
     w.write_all(
         encode_line(&ClientMessage::Login {
             name: "scheduler_test".to_string(),
-            protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: protocol::current_login_capabilities(),
+        })?
         .as_bytes(),
     )
     .await?;
 
     let welcome = read_packet(&mut lines).await?;
-    assert!(matches!(welcome, ServerMessage::Welcome { .. }), "expected Welcome, got {welcome:?}");
+    assert!(
+        matches!(welcome, ServerMessage::Welcome { .. }),
+        "expected Welcome, got {welcome:?}"
+    );
 
     let announcement = read_packet(&mut lines).await?;
     let announcement = match announcement {
@@ -88,8 +94,10 @@ async fn connect_and_complete_handshake(
     };
 
     w.write_all(
-        encode_line(&ClientMessage::ResourceAvailabilityReport(build_report(&announcement)))?
-            .as_bytes(),
+        encode_line(&ClientMessage::ResourceAvailabilityReport(build_report(
+            &announcement,
+        )))?
+        .as_bytes(),
     )
     .await?;
 
@@ -118,7 +126,10 @@ fn build_report(announcement: &ResourceAnnouncement) -> ResourceAvailabilityRepo
             })
         })
         .collect();
-    ResourceAvailabilityReport { resources, is_fully_available: true }
+    ResourceAvailabilityReport {
+        resources,
+        is_fully_available: true,
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -157,8 +168,16 @@ async fn server_ping_sequences_increment() -> Result<()> {
 
     let (_w, mut lines) = connect_and_complete_handshake(addr).await?;
 
-    let seq1 = timeout(Duration::from_millis(500), read_until_server_ping(&mut lines)).await??;
-    let seq2 = timeout(Duration::from_millis(500), read_until_server_ping(&mut lines)).await??;
+    let seq1 = timeout(
+        Duration::from_millis(500),
+        read_until_server_ping(&mut lines),
+    )
+    .await??;
+    let seq2 = timeout(
+        Duration::from_millis(500),
+        read_until_server_ping(&mut lines),
+    )
+    .await??;
 
     assert_eq!(seq1, 1);
     assert_eq!(seq2, 2);
@@ -180,7 +199,11 @@ async fn server_pong_reply_updates_registry_counts() -> Result<()> {
     let (mut w, mut lines) = connect_and_complete_handshake(addr).await?;
 
     // Wait for the first ServerPing
-    let seq = timeout(Duration::from_millis(500), read_until_server_ping(&mut lines)).await??;
+    let seq = timeout(
+        Duration::from_millis(500),
+        read_until_server_ping(&mut lines),
+    )
+    .await??;
     assert_eq!(seq, 1);
 
     // Reply with matching ServerPong
@@ -194,7 +217,10 @@ async fn server_pong_reply_updates_registry_counts() -> Result<()> {
     assert_eq!(snap.sessions.len(), 1);
     let entry = &snap.sessions[0];
     // Ping count may be > 1 if interval fired multiple times; at least 1 required.
-    assert!(entry.server_ping_sent_count >= 1, "ping sent count must be >= 1");
+    assert!(
+        entry.server_ping_sent_count >= 1,
+        "ping sent count must be >= 1"
+    );
     assert_eq!(entry.server_pong_received_count, 1, "pong received count");
 
     server_task.abort();
@@ -214,7 +240,11 @@ async fn mismatched_server_pong_sequence_is_not_fatal() -> Result<()> {
     let (mut w, mut lines) = connect_and_complete_handshake(addr).await?;
 
     // Wait for first ServerPing
-    let _ = timeout(Duration::from_millis(500), read_until_server_ping(&mut lines)).await??;
+    let _ = timeout(
+        Duration::from_millis(500),
+        read_until_server_ping(&mut lines),
+    )
+    .await??;
 
     // Send ServerPong with wrong sequence (999 instead of 1)
     w.write_all(encode_line(&ClientMessage::ServerPong { sequence: 999 })?.as_bytes())
@@ -224,7 +254,10 @@ async fn mismatched_server_pong_sequence_is_not_fatal() -> Result<()> {
 
     // Session must still be connected — mismatch is not fatal
     let snap = server_state.registry.lock().unwrap().snapshot();
-    assert_eq!(snap.connected_sessions, 1, "session must still be connected");
+    assert_eq!(
+        snap.connected_sessions, 1,
+        "session must still be connected"
+    );
     // Pong was still recorded (server doesn't validate sequence in report-only mode)
     assert_eq!(snap.sessions[0].server_pong_received_count, 1);
 
@@ -254,9 +287,18 @@ async fn report_only_never_disconnects_on_missing_pong() -> Result<()> {
 
     // Session still connected — ReportOnly never disconnects on missed pongs
     let snap = server_state.registry.lock().unwrap().snapshot();
-    assert_eq!(snap.connected_sessions, 1, "session must still be connected");
-    assert_eq!(snap.sessions[0].server_pong_received_count, 0, "no pongs sent");
-    assert!(snap.sessions[0].server_ping_sent_count >= 2, "server sent multiple pings");
+    assert_eq!(
+        snap.connected_sessions, 1,
+        "session must still be connected"
+    );
+    assert_eq!(
+        snap.sessions[0].server_pong_received_count, 0,
+        "no pongs sent"
+    );
+    assert!(
+        snap.sessions[0].server_ping_sent_count >= 2,
+        "server sent multiple pings"
+    );
 
     server_task.abort();
     Ok(())
@@ -276,7 +318,15 @@ async fn session_cleanup_stops_scheduler_state() -> Result<()> {
 
     // Let scheduler fire at least once
     sleep(Duration::from_millis(80)).await;
-    assert_eq!(server_state.registry.lock().unwrap().snapshot().connected_sessions, 1);
+    assert_eq!(
+        server_state
+            .registry
+            .lock()
+            .unwrap()
+            .snapshot()
+            .connected_sessions,
+        1
+    );
 
     // Drop the connection
     drop(w);
@@ -304,7 +354,11 @@ async fn diagnostics_text_shows_server_heartbeat_counts() -> Result<()> {
 
     let (mut w, mut lines) = connect_and_complete_handshake(addr).await?;
 
-    let _ = timeout(Duration::from_millis(500), read_until_server_ping(&mut lines)).await??;
+    let _ = timeout(
+        Duration::from_millis(500),
+        read_until_server_ping(&mut lines),
+    )
+    .await??;
     w.write_all(encode_line(&ClientMessage::ServerPong { sequence: 1 })?.as_bytes())
         .await?;
     sleep(Duration::from_millis(50)).await;

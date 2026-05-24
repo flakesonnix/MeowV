@@ -65,7 +65,9 @@ impl FromStr for SignatureAlgorithm {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "ed25519" => Ok(Self::Ed25519),
-            other => Err(SignatureMetadataError::UnsupportedAlgorithm(other.to_string())),
+            other => Err(SignatureMetadataError::UnsupportedAlgorithm(
+                other.to_string(),
+            )),
         }
     }
 }
@@ -134,7 +136,9 @@ pub struct CanonicalFilePayload {
     pub sha256: String,
 }
 
-pub fn build_canonical_payload(announcement: &ResourceAnnouncement) -> Option<CanonicalAnnouncementPayload> {
+pub fn build_canonical_payload(
+    announcement: &ResourceAnnouncement,
+) -> Option<CanonicalAnnouncementPayload> {
     let sig = announcement.signature.as_ref()?;
     if sig.algorithm.is_empty() || sig.key_id.is_empty() {
         return None;
@@ -323,10 +327,13 @@ impl ResourceDownloadPreflightPlan {
                     ResourceDownloadPreflightAction::AlreadyAvailable => "already_available",
                     ResourceDownloadPreflightAction::FetchMissing => "fetch_missing",
                     ResourceDownloadPreflightAction::ReplaceInvalid => "replace_invalid",
-                    ResourceDownloadPreflightAction::BlockedBySignaturePolicy => "blocked_by_signature_policy",
-                    ResourceDownloadPreflightAction::BlockedByResourcePolicy => "blocked_by_resource_policy",
+                    ResourceDownloadPreflightAction::BlockedBySignaturePolicy =>
+                        "blocked_by_signature_policy",
+                    ResourceDownloadPreflightAction::BlockedByResourcePolicy =>
+                        "blocked_by_resource_policy",
                     ResourceDownloadPreflightAction::UnsupportedResource => "unsupported_resource",
-                    ResourceDownloadPreflightAction::WouldVerifyAfterFetch => "would_verify_after_fetch",
+                    ResourceDownloadPreflightAction::WouldVerifyAfterFetch =>
+                        "would_verify_after_fetch",
                 },
                 entry.resource_name,
                 entry.file_path,
@@ -346,12 +353,18 @@ pub enum ClientMessage {
         capabilities: LoginCapabilities,
     },
     /// Heartbeat ping from client to server. Server should reply with Pong(sequence).
-    Ping { sequence: u64 },
+    Ping {
+        sequence: u64,
+    },
     /// Reply to a server-initiated ServerPing. Client echoes the sequence back.
     /// This is the authoritative liveness path: the server owns the timer and
     /// can detect missed replies independently of the client.
-    ServerPong { sequence: u64 },
-    Chat { message: String },
+    ServerPong {
+        sequence: u64,
+    },
+    Chat {
+        message: String,
+    },
     ResourceAvailabilityReport(ResourceAvailabilityReport),
 }
 
@@ -451,7 +464,10 @@ impl CapabilityNegotiationWarning {
                 format!("missing optional capability: {}", capability.to_name())
             }
             Self::UnsupportedOptionalCapability { capability } => {
-                format!("client advertised unsupported optional capability: {}", capability.to_name())
+                format!(
+                    "client advertised unsupported optional capability: {}",
+                    capability.to_name()
+                )
             }
             Self::UnknownFeatureFlag { feature_flag } => {
                 format!("unknown feature flag: {feature_flag}")
@@ -495,7 +511,10 @@ impl CapabilityNegotiationReport {
             if caps.is_empty() {
                 "<none>".to_string()
             } else {
-                caps.iter().map(ProtocolCapability::to_name).collect::<Vec<_>>().join(",")
+                caps.iter()
+                    .map(ProtocolCapability::to_name)
+                    .collect::<Vec<_>>()
+                    .join(",")
             }
         };
         let fmt_flags = |flags: &[String]| {
@@ -509,14 +528,22 @@ impl CapabilityNegotiationReport {
             if warnings.is_empty() {
                 "<none>".to_string()
             } else {
-                warnings.iter().map(CapabilityNegotiationWarning::to_text).collect::<Vec<_>>().join(" | ")
+                warnings
+                    .iter()
+                    .map(CapabilityNegotiationWarning::to_text)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
             }
         };
         let fmt_viol = |violations: &[CapabilityNegotiationViolation]| {
             if violations.is_empty() {
                 "<none>".to_string()
             } else {
-                violations.iter().map(CapabilityNegotiationViolation::to_text).collect::<Vec<_>>().join(" | ")
+                violations
+                    .iter()
+                    .map(CapabilityNegotiationViolation::to_text)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
             }
         };
 
@@ -553,12 +580,16 @@ pub enum ServerMessage {
     },
     /// Heartbeat pong from server to client, echoing the sequence from Ping.
     /// This is the client-diagnostic direction: client initiates, server echoes.
-    Pong { sequence: u64 },
+    Pong {
+        sequence: u64,
+    },
     /// Server-initiated heartbeat ping. Client must reply with ServerPong(sequence).
     /// This is the authoritative liveness direction: the server owns the timer and
     /// can measure missed replies without relying on client-reported data.
     /// Inert stub — no live timer or enforcement in current milestone.
-    ServerPing { sequence: u64 },
+    ServerPing {
+        sequence: u64,
+    },
     ChatBroadcast {
         from: String,
         message: String,
@@ -735,8 +766,9 @@ pub fn build_resource_download_preflight_plan(
 ) -> ResourceDownloadPreflightPlan {
     let mut entries = Vec::new();
 
-    let blocked_by_signature = matches!(signature_policy, signature_engine::SignaturePolicy::Strict)
-        && !matches!(signature.status, SignatureVerificationStatus::Valid);
+    let blocked_by_signature =
+        matches!(signature_policy, signature_engine::SignaturePolicy::Strict)
+            && !matches!(signature.status, SignatureVerificationStatus::Valid);
     let blocked_by_resource_policy = policy_evaluation
         .map(|evaluation| evaluation.decision == ResourceJoinDecision::Blocked)
         .unwrap_or(false);
@@ -774,7 +806,9 @@ pub fn build_resource_download_preflight_plan(
                 (
                     ResourceDownloadPreflightAction::BlockedByResourcePolicy,
                     policy_evaluation
-                        .map(|evaluation| format!("resource policy decision: {:?}", evaluation.decision))
+                        .map(|evaluation| {
+                            format!("resource policy decision: {:?}", evaluation.decision)
+                        })
                         .unwrap_or_else(|| "resource policy blocked".to_string()),
                 )
             } else {
@@ -943,7 +977,10 @@ pub fn evaluate_capability_negotiation(
     unsupported_client_optional.sort();
     unsupported_client_optional.dedup();
 
-    let unknown_feature_flags = normalized_advertised.feature_flags.clone().unwrap_or_default();
+    let unknown_feature_flags = normalized_advertised
+        .feature_flags
+        .clone()
+        .unwrap_or_default();
 
     let mut warnings = Vec::new();
     for capability in &optional_missing {
@@ -952,9 +989,11 @@ pub fn evaluate_capability_negotiation(
         });
     }
     for capability in &unsupported_client_optional {
-        warnings.push(CapabilityNegotiationWarning::UnsupportedOptionalCapability {
-            capability: capability.clone(),
-        });
+        warnings.push(
+            CapabilityNegotiationWarning::UnsupportedOptionalCapability {
+                capability: capability.clone(),
+            },
+        );
     }
     for feature_flag in &unknown_feature_flags {
         warnings.push(CapabilityNegotiationWarning::UnknownFeatureFlag {
@@ -1891,10 +1930,8 @@ mod tests {
 
     #[test]
     fn login_missing_capability_payload_rejected() {
-        let err = decode_client_line(
-            r#"{"type":"login","name":"alice","protocol_version":2}"#,
-        )
-        .unwrap_err();
+        let err = decode_client_line(r#"{"type":"login","name":"alice","protocol_version":2}"#)
+            .unwrap_err();
         assert!(err.to_string().contains("capabilities"));
     }
 
@@ -1977,7 +2014,10 @@ mod tests {
         let report = evaluate_capability_negotiation(
             &LoginCapabilities {
                 required: current_login_capabilities().required,
-                optional: vec![ProtocolCapability::SignatureMetadata, ProtocolCapability::ResourceAnnouncement],
+                optional: vec![
+                    ProtocolCapability::SignatureMetadata,
+                    ProtocolCapability::ResourceAnnouncement,
+                ],
                 feature_flags: None,
             },
             &CapabilityNegotiationPolicy {
@@ -2006,7 +2046,11 @@ mod tests {
             &current_capability_negotiation_policy(),
         );
         assert_eq!(report.to_text(), report.to_text());
-        assert!(report.to_text().contains("capability_negotiation_decision: would_reject"));
+        assert!(
+            report
+                .to_text()
+                .contains("capability_negotiation_decision: would_reject")
+        );
     }
 
     #[test]
@@ -2024,7 +2068,10 @@ mod tests {
             None,
         );
         assert_eq!(plan.entries.len(), 1);
-        assert_eq!(plan.entries[0].action, ResourceDownloadPreflightAction::AlreadyAvailable);
+        assert_eq!(
+            plan.entries[0].action,
+            ResourceDownloadPreflightAction::AlreadyAvailable
+        );
     }
 
     #[test]
@@ -2042,8 +2089,14 @@ mod tests {
             None,
         );
         assert_eq!(plan.entries.len(), 2);
-        assert_eq!(plan.entries[0].action, ResourceDownloadPreflightAction::FetchMissing);
-        assert_eq!(plan.entries[1].action, ResourceDownloadPreflightAction::WouldVerifyAfterFetch);
+        assert_eq!(
+            plan.entries[0].action,
+            ResourceDownloadPreflightAction::FetchMissing
+        );
+        assert_eq!(
+            plan.entries[1].action,
+            ResourceDownloadPreflightAction::WouldVerifyAfterFetch
+        );
     }
 
     #[test]
@@ -2060,7 +2113,10 @@ mod tests {
             &signature_engine::SignaturePolicy::ReportOnly,
             None,
         );
-        assert_eq!(plan.entries[0].action, ResourceDownloadPreflightAction::ReplaceInvalid);
+        assert_eq!(
+            plan.entries[0].action,
+            ResourceDownloadPreflightAction::ReplaceInvalid
+        );
     }
 
     #[test]
@@ -2584,19 +2640,17 @@ mod tests {
 
     fn sample_plan_announcement() -> ResourceAnnouncement {
         ResourceAnnouncement {
-            resources: vec![
-                AnnouncedResource {
-                    name: "chat".to_string(),
-                    version: "0.1.0".to_string(),
-                    files: vec![AnnouncedResourceFile {
-                        relative_path: "resource.toml".to_string(),
-                        size_bytes: 123,
-                        sha256: "abc".to_string(),
-                    }],
-                    protocol_version: PROTOCOL_VERSION,
-                    requirement_level: ResourceRequirementLevel::Required,
-                },
-            ],
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
             signature: Some(ResourceAnnouncementSignature {
                 algorithm: "ed25519".to_string(),
                 key_id: "dev-key".to_string(),
@@ -2651,7 +2705,10 @@ mod tests {
         }];
         let plan = build_signature_verification_plan(&announcement, &trusted, false);
         assert_eq!(plan.entries.len(), 1);
-        assert_eq!(plan.entries[0].action, SignatureVerificationAction::VerifySignature);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::VerifySignature
+        );
         assert!(!plan.is_empty());
     }
 
@@ -2661,7 +2718,10 @@ mod tests {
         announcement.signature = None;
         let trusted = vec![];
         let plan = build_signature_verification_plan(&announcement, &trusted, false);
-        assert_eq!(plan.entries[0].action, SignatureVerificationAction::MissingSignature);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::MissingSignature
+        );
     }
 
     #[test]
@@ -2700,7 +2760,10 @@ mod tests {
             algorithm: "ed25519".to_string(),
         }];
         let plan = build_signature_verification_plan(&announcement, &trusted, false);
-        assert_eq!(plan.entries[0].action, SignatureVerificationAction::UnknownKeyId);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::UnknownKeyId
+        );
     }
 
     #[test]
@@ -2837,14 +2900,20 @@ mod tests {
             algorithm: "rsa".to_string(),
         }];
         let plan = build_signature_verification_plan(&announcement, &trusted, false);
-        assert_eq!(plan.entries[0].action, SignatureVerificationAction::UnknownKeyId);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::UnknownKeyId
+        );
     }
 
     #[test]
     fn plan_no_trusted_keys_all_unknown() {
         let announcement = sample_plan_announcement();
         let plan = build_signature_verification_plan(&announcement, &[], false);
-        assert_eq!(plan.entries[0].action, SignatureVerificationAction::UnknownKeyId);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::UnknownKeyId
+        );
     }
 
     #[test]
@@ -2861,7 +2930,10 @@ mod tests {
         }];
         let plan = build_signature_verification_plan(&announcement, &trusted, false);
         // case-sensitive: Dev-Key != dev-key
-        assert_eq!(plan.entries[0].action, SignatureVerificationAction::UnknownKeyId);
+        assert_eq!(
+            plan.entries[0].action,
+            SignatureVerificationAction::UnknownKeyId
+        );
     }
 
     #[test]
@@ -2915,7 +2987,10 @@ mod tests {
         let msg = ClientMessage::ServerPong { sequence: u64::MAX };
         let line = encode_line(&msg).unwrap();
         let decoded = decode_client_line(line.trim()).unwrap();
-        assert!(matches!(decoded, ClientMessage::ServerPong { sequence: u64::MAX }));
+        assert!(matches!(
+            decoded,
+            ClientMessage::ServerPong { sequence: u64::MAX }
+        ));
     }
 
     #[test]

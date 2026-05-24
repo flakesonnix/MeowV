@@ -23,7 +23,10 @@ fn make_config(addr: &str, ping_interval_ms: u64, policy: HeartbeatPolicy) -> Se
             motd: "strict heartbeat enforcement test".to_string(),
             ..ServerSection::default()
         },
-        heartbeat: HeartbeatSection { policy, server_ping_interval_ms: ping_interval_ms },
+        heartbeat: HeartbeatSection {
+            policy,
+            server_ping_interval_ms: ping_interval_ms,
+        },
         ..ServerConfig::default()
     }
 }
@@ -38,9 +41,7 @@ where
     Ok(decode_server_line(&line)?)
 }
 
-async fn read_until_server_ping<R>(
-    lines: &mut tokio::io::Lines<BufReader<R>>,
-) -> Result<u64>
+async fn read_until_server_ping<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> Result<u64>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -69,13 +70,18 @@ async fn connect_and_complete_handshake(
     w.write_all(
         encode_line(&ClientMessage::Login {
             name: "strict_hb_test".to_string(),
-            protocol_version: PROTOCOL_VERSION, capabilities: protocol::current_login_capabilities() })?
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: protocol::current_login_capabilities(),
+        })?
         .as_bytes(),
     )
     .await?;
 
     let welcome = read_packet(&mut lines).await?;
-    assert!(matches!(welcome, ServerMessage::Welcome { .. }), "expected Welcome, got {welcome:?}");
+    assert!(
+        matches!(welcome, ServerMessage::Welcome { .. }),
+        "expected Welcome, got {welcome:?}"
+    );
 
     let announcement = read_packet(&mut lines).await?;
     let announcement = match announcement {
@@ -84,8 +90,10 @@ async fn connect_and_complete_handshake(
     };
 
     w.write_all(
-        encode_line(&ClientMessage::ResourceAvailabilityReport(build_report(&announcement)))?
-            .as_bytes(),
+        encode_line(&ClientMessage::ResourceAvailabilityReport(build_report(
+            &announcement,
+        )))?
+        .as_bytes(),
     )
     .await?;
 
@@ -113,7 +121,10 @@ fn build_report(announcement: &ResourceAnnouncement) -> ResourceAvailabilityRepo
             })
         })
         .collect();
-    ResourceAvailabilityReport { resources, is_fully_available: true }
+    ResourceAvailabilityReport {
+        resources,
+        is_fully_available: true,
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -139,7 +150,10 @@ async fn report_only_never_disconnects_for_missed_server_pong() -> Result<()> {
     while let Ok(Ok(Some(_))) = timeout(Duration::from_millis(5), lines.next_line()).await {}
 
     let snap = server_state.registry.lock().unwrap().snapshot();
-    assert_eq!(snap.connected_sessions, 1, "ReportOnly must never disconnect on missed pong");
+    assert_eq!(
+        snap.connected_sessions, 1,
+        "ReportOnly must never disconnect on missed pong"
+    );
     assert_eq!(snap.sessions[0].server_pong_received_count, 0);
     assert!(snap.sessions[0].server_ping_sent_count >= threshold as usize);
 
@@ -175,7 +189,10 @@ async fn strict_healthy_heartbeat_keeps_session_connected() -> Result<()> {
     sleep(Duration::from_millis(30)).await;
 
     let snap = server_state.registry.lock().unwrap().snapshot();
-    assert_eq!(snap.connected_sessions, 1, "healthy Strict client must stay connected");
+    assert_eq!(
+        snap.connected_sessions, 1,
+        "healthy Strict client must stay connected"
+    );
     let entry = &snap.sessions[0];
     assert_eq!(entry.server_pong_received_count, reply_count);
 
@@ -202,9 +219,9 @@ async fn strict_missed_server_pong_threshold_disconnects_session() -> Result<()>
     let stream_closed = timeout(Duration::from_millis(wait_budget_ms), async {
         loop {
             match lines.next_line().await {
-                Ok(None) => return true,  // EOF — server closed the connection
-                Ok(Some(_)) => {}         // keep draining (may include Disconnect message)
-                Err(_) => return true,    // I/O error also means connection closed
+                Ok(None) => return true, // EOF — server closed the connection
+                Ok(Some(_)) => {}        // keep draining (may include Disconnect message)
+                Err(_) => return true,   // I/O error also means connection closed
             }
         }
     })
