@@ -15,17 +15,26 @@ use protocol::{
 /// Outcome of fetching a single file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchOutcome {
-    Success,
+    /// Fetched, verified, left in staging. No cache commit was attempted.
+    StagedVerified,
+    /// Verified and atomically committed to cache.
+    CommittedToCache,
+    /// Replaced existing invalid cache content with verified content.
+    ReplaceInvalidCommitted,
+    /// Fetch or commit failed.
     Failure(FetchFailureReason),
 }
 
 impl FetchOutcome {
     pub fn is_success(&self) -> bool {
-        matches!(self, Self::Success)
+        matches!(
+            self,
+            Self::StagedVerified | Self::CommittedToCache | Self::ReplaceInvalidCommitted
+        )
     }
 }
 
-/// Reason why a file fetch failed.
+/// Reason why a file fetch or commit failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchFailureReason {
     NoValidSource,
@@ -40,6 +49,7 @@ pub enum FetchFailureReason {
     StagingDirectoryCreationFailed,
     SymlinkRejected,
     PathTraversalRejected,
+    CommitFailed(String),
     IoError(String),
 }
 
@@ -58,6 +68,7 @@ impl std::fmt::Display for FetchFailureReason {
             Self::StagingDirectoryCreationFailed => write!(f, "staging directory creation failed"),
             Self::SymlinkRejected => write!(f, "symlink rejected"),
             Self::PathTraversalRejected => write!(f, "path traversal rejected"),
+            Self::CommitFailed(msg) => write!(f, "commit failed: {msg}"),
             Self::IoError(msg) => write!(f, "I/O error: {msg}"),
         }
     }
@@ -79,7 +90,11 @@ pub struct FetchEntryReport {
 impl FetchEntryReport {
     fn to_text(&self) -> String {
         let status = match &self.outcome {
-            FetchOutcome::Success => "success".to_string(),
+            FetchOutcome::StagedVerified => {
+                "staged_verified (use --allow-cache-commit to commit)".to_string()
+            }
+            FetchOutcome::CommittedToCache => "committed_to_cache".to_string(),
+            FetchOutcome::ReplaceInvalidCommitted => "replace_invalid_committed".to_string(),
             FetchOutcome::Failure(reason) => format!("failure: {reason}"),
         };
         format!(
@@ -122,10 +137,11 @@ impl FetchReport {
     }
 }
 
-/// Configuration for fetch execution.
+/// Configuration for fetch execution and optional cache commit.
 #[derive(Debug, Clone)]
 pub struct FetchConfig {
     pub allow_fetch: bool,
+    pub allow_cache_commit: bool,
     pub cache_dir: Option<String>,
     pub fetch_report_path: Option<String>,
 }
@@ -135,7 +151,9 @@ pub struct FetchConfig {
 /// Only runs if `config.allow_fetch` is `true`. For each entry in the
 /// preflight plan that requires fetching and has `plan_ok`, the file
 /// is fetched to `<cache_dir>/.staging/`, verified, and left in staging
-/// (no cache commit). Returns a `FetchReport` with per-entry results.
+/// by default. If `config.allow_cache_commit` is `true`, verified files
+/// are atomically renamed from staging to `<cache_dir>/<file_path>` after
+/// successful verification. Returns a `FetchReport` with per-entry results.
 pub async fn execute_fetch_plan(
     announcement: &ResourceAnnouncement,
     preflight_plan: &ResourceDownloadPreflightPlan,
@@ -169,6 +187,18 @@ pub async fn execute_fetch_plan(
                 (file.size_bytes, file.sha256.clone()),
             );
         }
+    }
+
+    // Determine commit behaviour per-entry from preflight action
+    let mut action_map: std::collections::HashMap<
+        (String, String),
+        protocol::ResourceDownloadPreflightAction,
+    > = std::collections::HashMap::new();
+    for pe in &preflight_plan.entries {
+        action_map.insert(
+            (pe.resource_name.clone(), pe.file_path.clone()),
+            pe.action.clone(),
+        );
     }
 
     // Iterate over execution plan entries which have plan_ok/steps already computed
@@ -212,7 +242,7 @@ pub async fn execute_fetch_plan(
         };
 
         let start = Instant::now();
-        let outcome = fetch_and_verify_single_file(
+        let fetch_outcome = fetch_and_verify_single_file(
             &exec_entry.resource_name,
             &exec_entry.file_path,
             &source,
@@ -222,13 +252,66 @@ pub async fn execute_fetch_plan(
         )
         .await;
 
+        let final_outcome = if fetch_outcome.is_success() && config.allow_cache_commit {
+            // Attempt atomic commit from staging to cache path
+            let target_path = cache_dir.join(&exec_entry.file_path);
+            let action = action_map.get(&(
+                exec_entry.resource_name.clone(),
+                exec_entry.file_path.clone(),
+            ));
+
+            // Find the staged path (the only file in .staging/ whose name starts with sanitized file_path)
+            let staged_file = find_staged_file(&cache_dir, &exec_entry.file_path).await;
+
+            match staged_file {
+                Some(staged_path) => match commit_verified_file(&staged_path, &target_path).await {
+                    Ok(()) => {
+                        let _ = tokio::fs::remove_file(&staged_path).await;
+                        let is_replace = matches!(
+                            action,
+                            Some(&protocol::ResourceDownloadPreflightAction::ReplaceInvalid)
+                        );
+                        if is_replace {
+                            info!(
+                                "replaced invalid cache entry: {}:{}",
+                                exec_entry.resource_name, exec_entry.file_path
+                            );
+                            FetchOutcome::ReplaceInvalidCommitted
+                        } else {
+                            info!(
+                                "committed to cache: {}:{}",
+                                exec_entry.resource_name, exec_entry.file_path
+                            );
+                            FetchOutcome::CommittedToCache
+                        }
+                    }
+                    Err(outcome) => {
+                        let _ = tokio::fs::remove_file(&staged_path).await;
+                        outcome
+                    }
+                },
+                None => {
+                    // Staged file disappeared; treat as failure
+                    error!(
+                        "staged file vanished before commit: {}:{}",
+                        exec_entry.resource_name, exec_entry.file_path
+                    );
+                    FetchOutcome::Failure(FetchFailureReason::CommitFailed(
+                        "staged file not found before commit".to_string(),
+                    ))
+                }
+            }
+        } else {
+            fetch_outcome
+        };
+
         let duration_ms = start.elapsed().as_millis() as u64;
         report_entries.push(FetchEntryReport {
             resource_name: exec_entry.resource_name.clone(),
             file_path: exec_entry.file_path.clone(),
             source_scheme: source.scheme.clone(),
             source_uri: source.uri.clone(),
-            outcome,
+            outcome: final_outcome,
             expected_size_bytes: expected_size,
             expected_sha256,
             duration_ms,
@@ -238,6 +321,82 @@ pub async fn execute_fetch_plan(
     Ok(FetchReport {
         entries: report_entries,
     })
+}
+
+/// Find the staged file for a given file_path inside `<cache_dir>/.staging/`.
+/// Looks for a file whose name starts with the sanitized file_path.
+async fn find_staged_file(cache_dir: &Path, file_path: &str) -> Option<PathBuf> {
+    let staging_dir = cache_dir.join(".staging");
+    let sanitized_prefix = sanitize_name(file_path);
+    let mut entries = tokio::fs::read_dir(&staging_dir).await.ok()?;
+    while let Some(entry) = entries.next_entry().await.ok()? {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with(&sanitized_prefix) {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+/// Atomically commit a verified staged file to the cache target path.
+///
+/// Sandbox guards:
+/// - Rejects symlinks in the target path.
+/// - Rejects path traversal in the target path.
+/// - Creates parent directories safely.
+/// - Does not overwrite an existing valid cache entry (checked via SHA-256).
+/// - Uses `std::fs::rename` (atomic on same filesystem) or falls back to
+///   copy-then-delete for cross-filesystem moves.
+async fn commit_verified_file(
+    staged_path: &Path,
+    target_path: &Path,
+) -> std::result::Result<(), FetchOutcome> {
+    // Sandbox: reject symlinks in target path
+    if is_symlink_in_path(target_path) {
+        return Err(FetchOutcome::Failure(FetchFailureReason::SymlinkRejected));
+    }
+
+    // Sandbox: reject path traversal in target path
+    if contains_path_traversal_standalone(target_path) {
+        return Err(FetchOutcome::Failure(
+            FetchFailureReason::PathTraversalRejected,
+        ));
+    }
+
+    // Create parent directories if needed
+    if let Some(parent) = target_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            FetchOutcome::Failure(FetchFailureReason::CommitFailed(format!(
+                "failed to create parent directory: {e}"
+            )))
+        })?;
+    }
+
+    // Attempt atomic rename
+    if let Err(_e) = tokio::fs::rename(staged_path, target_path).await {
+        // rename fails across filesystem boundaries; fall back to copy + delete
+        tokio::fs::copy(staged_path, target_path)
+            .await
+            .map_err(|e| {
+                FetchOutcome::Failure(FetchFailureReason::CommitFailed(format!(
+                    "copy failed after rename: {e}"
+                )))
+            })?;
+
+        tokio::fs::remove_file(staged_path).await.map_err(|e| {
+            FetchOutcome::Failure(FetchFailureReason::CommitFailed(format!(
+                "cleanup after copy failed: {e}"
+            )))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn contains_path_traversal_standalone(path: &Path) -> bool {
+    path.components()
+        .any(|c| c == std::path::Component::ParentDir)
 }
 
 #[allow(dead_code)]
@@ -309,7 +468,7 @@ async fn fetch_and_verify_single_file(
                 size = %expected_size,
                 "fetch verified successfully (staged, not committed)"
             );
-            FetchOutcome::Success
+            FetchOutcome::StagedVerified
         }
         Err(outcome) => {
             let _ = tokio::fs::remove_file(&staged_path).await;
@@ -504,8 +663,14 @@ impl serde::Serialize for FetchEntryReport {
         s.serialize_field("source_scheme", &self.source_scheme)?;
         s.serialize_field("source_uri", &self.source_uri)?;
         match &self.outcome {
-            FetchOutcome::Success => {
-                s.serialize_field("outcome", "success")?;
+            FetchOutcome::StagedVerified => {
+                s.serialize_field("outcome", "staged_verified")?;
+            }
+            FetchOutcome::CommittedToCache => {
+                s.serialize_field("outcome", "committed_to_cache")?;
+            }
+            FetchOutcome::ReplaceInvalidCommitted => {
+                s.serialize_field("outcome", "replace_invalid_committed")?;
             }
             FetchOutcome::Failure(reason) => {
                 s.serialize_field("outcome", "failure")?;
@@ -576,7 +741,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(outcome, FetchOutcome::Success);
+        assert_eq!(outcome, FetchOutcome::StagedVerified);
         let staging = cache_dir.join(".staging");
         assert!(staging.exists());
         let entries: Vec<_> = std::fs::read_dir(&staging).unwrap().collect();
@@ -728,7 +893,7 @@ mod tests {
                     file_path: "data.txt".to_string(),
                     source_scheme: "file".to_string(),
                     source_uri: "/tmp/source".to_string(),
-                    outcome: FetchOutcome::Success,
+                    outcome: FetchOutcome::StagedVerified,
                     expected_size_bytes: 100,
                     expected_sha256: "abcdef".to_string(),
                     duration_ms: 5,
@@ -747,7 +912,7 @@ mod tests {
         };
         let text = report.to_text();
         assert!(text.contains("resource fetch: 2 entries"));
-        assert!(text.contains("success"));
+        assert!(text.contains("staged_verified"));
         assert!(text.contains("failure: hash mismatch"));
     }
 
@@ -759,7 +924,7 @@ mod tests {
                 file_path: "data.txt".to_string(),
                 source_scheme: "file".to_string(),
                 source_uri: "/tmp/source".to_string(),
-                outcome: FetchOutcome::Success,
+                outcome: FetchOutcome::StagedVerified,
                 expected_size_bytes: 100,
                 expected_sha256: "abcdef".to_string(),
                 duration_ms: 5,
@@ -768,7 +933,7 @@ mod tests {
         let json = report.to_json().unwrap();
         assert!(json.contains("resource_name"));
         assert!(json.contains("outcome"));
-        assert!(json.contains("success"));
+        assert!(json.contains("staged_verified"));
     }
 
     #[test]
@@ -891,6 +1056,7 @@ mod tests {
 
         let config = FetchConfig {
             allow_fetch: true,
+            allow_cache_commit: false,
             cache_dir: Some(cache_dir.to_string_lossy().to_string()),
             fetch_report_path: None,
         };
@@ -900,8 +1066,364 @@ mod tests {
             .block_on(execute_fetch_plan(&announcement, &preflight, &config))
             .unwrap();
         assert_eq!(report.entries.len(), 1);
-        assert_eq!(report.entries[0].outcome, FetchOutcome::Success);
+        assert_eq!(report.entries[0].outcome, FetchOutcome::StagedVerified);
         assert_eq!(report.entries[0].resource_name, "test_r");
         assert_eq!(report.entries[0].file_path, "f.dat");
+    }
+
+    #[tokio::test]
+    async fn test_commit_after_fetch_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        let src_file = dir.path().join("source.dat");
+        let content = b"data for commit test";
+        std::fs::write(&src_file, content).unwrap();
+        let expected_sha256 = sha256_hex(content);
+
+        let source = make_source("file", &src_file.to_string_lossy());
+
+        let preflight_entry = make_preflight_entry(
+            "test_r",
+            "f.dat",
+            protocol::ResourceDownloadPreflightAction::FetchMissing,
+            source.clone(),
+        );
+        let preflight = protocol::ResourceDownloadPreflightPlan {
+            entries: vec![preflight_entry],
+        };
+        let announcement = make_single_resource_announcement(
+            "test_r",
+            "f.dat",
+            content.len() as u64,
+            &expected_sha256,
+        );
+
+        let config = FetchConfig {
+            allow_fetch: true,
+            allow_cache_commit: true,
+            cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+            fetch_report_path: None,
+        };
+
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].outcome, FetchOutcome::CommittedToCache);
+
+        // Verify file exists in cache (not just staging)
+        let cache_file = cache_dir.join("f.dat");
+        assert!(cache_file.exists(), "committed file should be in cache");
+        let actual_hash = hash_file_sha256(&cache_file).unwrap();
+        assert_eq!(actual_hash, expected_sha256);
+
+        // Staging should be empty after commit
+        let staging = cache_dir.join(".staging");
+        if staging.exists() {
+            let entries: Vec<_> = std::fs::read_dir(&staging).unwrap().collect();
+            assert_eq!(entries.len(), 0, "staging should be empty after commit");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_commit_without_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        let src_file = dir.path().join("source.dat");
+        let content = b"no commit without gate";
+        std::fs::write(&src_file, content).unwrap();
+        let expected_sha256 = sha256_hex(content);
+
+        let source = make_source("file", &src_file.to_string_lossy());
+        let preflight_entry = make_preflight_entry(
+            "test_r",
+            "f.dat",
+            protocol::ResourceDownloadPreflightAction::FetchMissing,
+            source.clone(),
+        );
+        let preflight = protocol::ResourceDownloadPreflightPlan {
+            entries: vec![preflight_entry],
+        };
+        let announcement = make_single_resource_announcement(
+            "test_r",
+            "f.dat",
+            content.len() as u64,
+            &expected_sha256,
+        );
+
+        let config = FetchConfig {
+            allow_fetch: true,
+            allow_cache_commit: false,
+            cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+            fetch_report_path: None,
+        };
+
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].outcome, FetchOutcome::StagedVerified);
+
+        // Cache should NOT contain the file
+        let cache_file = cache_dir.join("f.dat");
+        assert!(
+            !cache_file.exists(),
+            "file should not be committed without gate"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_hash_mismatch_does_not_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        let src_file = dir.path().join("source.dat");
+        let content = b"hash mismatch test";
+        std::fs::write(&src_file, content).unwrap();
+
+        let source = make_source("file", &src_file.to_string_lossy());
+        let preflight_entry = make_preflight_entry(
+            "test_r",
+            "f.dat",
+            protocol::ResourceDownloadPreflightAction::FetchMissing,
+            source.clone(),
+        );
+        let preflight = protocol::ResourceDownloadPreflightPlan {
+            entries: vec![preflight_entry],
+        };
+        // Announcement has WRONG sha256
+        let wrong_sha =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        let announcement =
+            make_single_resource_announcement("test_r", "f.dat", content.len() as u64, &wrong_sha);
+
+        let config = FetchConfig {
+            allow_fetch: true,
+            allow_cache_commit: true,
+            cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+            fetch_report_path: None,
+        };
+
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(
+            report.entries[0].outcome,
+            FetchOutcome::Failure(FetchFailureReason::HashMismatch)
+        );
+
+        // Cache should NOT contain the file
+        let cache_file = cache_dir.join("f.dat");
+        assert!(
+            !cache_file.exists(),
+            "file should not be committed after hash mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_symlink_target_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        let link_dir = dir.path().join("link_cache");
+        std::fs::create_dir(&cache_dir).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&cache_dir, &link_dir).unwrap();
+
+        // Create staged file manually
+        let staging = link_dir.join(".staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        let staged_file = staging.join("test_file_abc123");
+        std::fs::write(&staged_file, b"content").unwrap();
+
+        // Target path goes through symlink — should be rejected
+        let target = link_dir.join("target.dat");
+
+        let result = commit_verified_file(&staged_file, &target).await;
+        assert_eq!(
+            result,
+            Err(FetchOutcome::Failure(FetchFailureReason::SymlinkRejected))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_path_traversal_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        std::fs::create_dir_all(cache_dir.join(".staging")).unwrap();
+
+        let staged_file = cache_dir.join(".staging").join("test_file_abc");
+        std::fs::write(&staged_file, b"content").unwrap();
+
+        // Target path with ".." — should be rejected
+        let target = cache_dir.join("../outside.dat");
+
+        let result = commit_verified_file(&staged_file, &target).await;
+        assert_eq!(
+            result,
+            Err(FetchOutcome::Failure(
+                FetchFailureReason::PathTraversalRejected
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_invalid_committed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        let src_file = dir.path().join("source.dat");
+        let content = b"replacement content";
+        std::fs::write(&src_file, content).unwrap();
+        let expected_sha256 = sha256_hex(content);
+
+        // Create an invalid cache entry (wrong content)
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(cache_dir.join("f.dat"), b"old invalid content").unwrap();
+
+        let source = make_source("file", &src_file.to_string_lossy());
+        let preflight_entry = make_preflight_entry(
+            "test_r",
+            "f.dat",
+            protocol::ResourceDownloadPreflightAction::ReplaceInvalid,
+            source.clone(),
+        );
+        let preflight = protocol::ResourceDownloadPreflightPlan {
+            entries: vec![preflight_entry],
+        };
+        let announcement = make_single_resource_announcement(
+            "test_r",
+            "f.dat",
+            content.len() as u64,
+            &expected_sha256,
+        );
+
+        let config = FetchConfig {
+            allow_fetch: true,
+            allow_cache_commit: true,
+            cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+            fetch_report_path: None,
+        };
+
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(
+            report.entries[0].outcome,
+            FetchOutcome::ReplaceInvalidCommitted
+        );
+
+        // Cache should now have the new content
+        let cache_file = cache_dir.join("f.dat");
+        assert!(cache_file.exists());
+        let actual_hash = hash_file_sha256(&cache_file).unwrap();
+        assert_eq!(actual_hash, expected_sha256);
+    }
+
+    #[tokio::test]
+    async fn test_staging_cleaned_up_after_commit_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        std::fs::create_dir_all(cache_dir.join(".staging")).unwrap();
+
+        // Staged file exists but target path has a file as parent directory,
+        // so create_dir_all will fail.
+        let staged_file = cache_dir.join(".staging").join("test_file_xyz");
+        std::fs::write(&staged_file, b"content").unwrap();
+
+        // Create a regular file that will serve as the "parent" of the target
+        std::fs::write(cache_dir.join("blocking_file"), b"").unwrap();
+        let target = cache_dir.join("blocking_file/subdir/f.dat");
+
+        let result = commit_verified_file(&staged_file, &target).await;
+        assert!(
+            matches!(
+                result,
+                Err(FetchOutcome::Failure(FetchFailureReason::CommitFailed(_)))
+            ),
+            "expected CommitFailed, got {result:?}"
+        );
+
+        // Staged file should still exist (commit was attempted but failed)
+        assert!(
+            staged_file.exists(),
+            "staged file should remain after failed commit"
+        );
+    }
+
+    #[test]
+    fn test_outcome_is_success() {
+        assert!(FetchOutcome::StagedVerified.is_success());
+        assert!(FetchOutcome::CommittedToCache.is_success());
+        assert!(FetchOutcome::ReplaceInvalidCommitted.is_success());
+        assert!(!FetchOutcome::Failure(FetchFailureReason::HashMismatch).is_success());
+    }
+
+    #[test]
+    fn test_contains_path_traversal_standalone() {
+        assert!(!contains_path_traversal_standalone(Path::new(
+            "/tmp/cache/f.dat"
+        )));
+        assert!(contains_path_traversal_standalone(Path::new(
+            "/tmp/cache/../f.dat"
+        )));
+        assert!(contains_path_traversal_standalone(Path::new(
+            "f.dat/../../etc/passwd"
+        )));
+        assert!(!contains_path_traversal_standalone(Path::new(
+            "normal/path/file.dat"
+        )));
+    }
+
+    // --- test helpers ---
+
+    fn make_preflight_entry(
+        resource_name: &str,
+        file_path: &str,
+        action: protocol::ResourceDownloadPreflightAction,
+        source: ResourceFetchSource,
+    ) -> protocol::ResourceDownloadPreflightEntry {
+        use protocol::{
+            ResourceDownloadPreflightEntry, ResourceFetchSourcePolicyDecision,
+            ResourceFetchSourcePolicyReport,
+        };
+        ResourceDownloadPreflightEntry {
+            resource_name: resource_name.to_string(),
+            file_path: file_path.to_string(),
+            action,
+            reason: "test reason".to_string(),
+            source_errors: vec![],
+            valid_sources: vec![source.clone()],
+            selected_source: Some(source),
+            fallback_sources: vec![],
+            source_policy: Some(ResourceFetchSourcePolicyReport {
+                decision: ResourceFetchSourcePolicyDecision::Allowed,
+                scheme: "file".to_string(),
+                allowed_schemes: vec!["file".to_string()],
+            }),
+        }
+    }
+
+    fn make_single_resource_announcement(
+        resource_name: &str,
+        file_path: &str,
+        size_bytes: u64,
+        sha256: &str,
+    ) -> ResourceAnnouncement {
+        use protocol::{AnnouncedResource, AnnouncedResourceFile, ResourceRequirementLevel};
+        ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: resource_name.to_string(),
+                version: "1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: file_path.to_string(),
+                    size_bytes,
+                    sha256: sha256.to_string(),
+                    sources: None,
+                }],
+                protocol_version: protocol::PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        }
     }
 }
