@@ -65,6 +65,26 @@
 | 4.17 | Client responds to ServerPing — client receive loop and heartbeat path reply `ServerPong(sequence)` to `ServerPing(sequence)`; `handle_server_ping` public helper; 5 integration tests |
 | 4.18 | Server-side ServerPing scheduler, report-only — per-session `interval_at` timer sends `ServerPing` after handshake; `ServerPong` replies recorded; `srv_ping_tx` / `srv_pong_rx` in registry + diagnostics; `server_ping_interval_ms` config; 7 integration tests; no enforcement |
 | 4.19 | Server-side heartbeat timeout status / planner — `ServerHeartbeatPlannerInput`, `ServerHeartbeatDecision` (NoActivity/Healthy/AwaitingPong/MissedPong/WouldDisconnect), `evaluate_server_heartbeat`; `srv_heartbeat=<label>` in registry diagnostics and admin sessions; `server_heartbeat_decision` in `SessionDiagnostics`; 15 planner unit tests + 7 registry/admin unit tests + 6 integration tests; no enforcement |
+| 4.20 | Strict server-side heartbeat enforcement — `Strict` policy + `WouldDisconnect` decision → clean disconnect in scheduler tick arm; `SessionEventKind::Failed` recorded with structured reason; registry updated to `Failed` before removal; diagnostics emitted on enforcement; `ReportOnly` unchanged; 5 integration tests |
+
+---
+
+## Milestone 4.20
+
+Strict server-side heartbeat enforcement:
+
+- Enforcement wired into the `srv_ping_interval.tick()` arm of the post-handshake `select!` loop
+- After each `ServerPing` is sent and counts updated, evaluates `evaluate_server_heartbeat(&input, &HeartbeatPolicy::Strict)` when `HeartbeatPolicy::Strict` is active
+- If `ServerHeartbeatDecision::WouldDisconnect` (missed ≥ `MISSED_SERVER_PONG_DISCONNECT_THRESHOLD`):
+  1. `session.fail(reason)` — state machine transitions to `Failed`
+  2. `warn!` with `pings_sent`, `pongs_received`, `missed` fields
+  3. `event_log.record(ServerEventKind::Failed, ...)` with structured reason
+  4. `registry.update_session(Failed, event_count)` — registry reflects failure before removal
+  5. Optional diagnostics emit (if `print_session_diagnostics` enabled)
+  6. `client_tx.send(Disconnect { reason: InvalidHandshake, message })` — best-effort; writer task may or may not deliver before abort
+  7. `break` — exits the main loop; cleanup + `SessionGuard` drop removes session from registry
+- `ReportOnly` policy: enforcement block skipped entirely; behavior identical to M4.19
+- `srv_heartbeat=would_disconnect` label is now a transient state under Strict (session is removed before it can be observed in a snapshot)
 
 ---
 

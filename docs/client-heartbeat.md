@@ -117,3 +117,12 @@ Server-Side Heartbeat Timeout Status / Planner (M4.19):
 - `SessionRegistrySnapshot::to_diagnostics_text()` extended with `srv_heartbeat=<label>` per session; admin `sessions` output includes the label automatically.
 - `SessionDiagnostics::with_heartbeat_policy()` now evaluates both directions; `server_heartbeat_decision: Option<String>` field emitted as `server_heartbeat_decision: <label>` in `to_text()` and included in `to_json_stub()`.
 - No enforcement or actual disconnect in this milestone; `WouldDisconnect` is a planning-only label.
+
+Strict Server-Side Heartbeat Enforcement (M4.20):
+
+- Enforcement runs in the `srv_ping_interval.tick()` arm of the post-handshake `select!` loop.
+- After each `ServerPing` is sent and counts recorded, `evaluate_server_heartbeat` is called under `Strict` policy.
+- On `WouldDisconnect` (missed ≥ `MISSED_SERVER_PONG_DISCONNECT_THRESHOLD`): `session.fail(reason)` transitions the session state machine to `Failed`; `SessionEventKind::Failed` recorded; registry updated to `Failed`; optional structured diagnostics emitted; `Disconnect` sent to client (best-effort via writer channel); `break` exits main loop.
+- `SessionGuard` RAII removes the session from the registry on handler exit — all exit paths covered.
+- Under `ReportOnly` the enforcement block is skipped entirely; behavior is identical to M4.19.
+- `srv_heartbeat=would_disconnect` label is transient under `Strict`: the session is removed before it can be read in a stable registry snapshot.
