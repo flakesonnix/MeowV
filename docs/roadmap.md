@@ -57,6 +57,7 @@
 | 4.9 | Heartbeat status / metrics — `HeartbeatMetrics` return from client loop; client prints summary on shutdown; server tracks `ping_received_count`/`pong_sent_count` via `SessionDiagnostics` |
 | 4.10 | Heartbeat admin observability — surface heartbeat counts in `sessions`/`diagnostics` admin output via registry snapshot; tests; docs |
 | 4.11 | Heartbeat timeout policy planner — `HeartbeatPolicy`, `HeartbeatDecision`, `HeartbeatPlannerInput`; deterministic evaluator; surfaced in `SessionDiagnostics`; report-only by default |
+| 4.12 | Heartbeat policy report in admin/status — `heartbeat=<label>` per-session in `sessions`/`diagnostics` output; `to_short_label()` on `HeartbeatDecision`; tests; docs |
 
 ---
 
@@ -251,6 +252,20 @@ Wire signature verification into resource flow (report-only):
 - 300 workspace tests passing
 - No enforcement, no disconnects, no downloads, no cache writes
 - `docs/signature-verification-reporting.md` — new doc
+
+## Milestone 4.12
+
+Heartbeat policy report in admin/status:
+
+- `HeartbeatDecision::to_short_label()` — concise `&'static str` for compact output: `no_activity`, `healthy`, `no_pong_yet`, `warn_timeout`, `unhealthy`, `would_disconnect`
+- `SessionRegistrySnapshot::to_diagnostics_text()` — per-session line now appends `heartbeat=<label>` derived from `ping_received_count`/`pong_sent_count` via `evaluate_heartbeat(ReportOnly)`
+- Admin `sessions` and `diagnostics` commands show heartbeat health label without extra commands or flags
+- 5 new `session_registry` tests + 2 new `admin` tests + 6 new `heartbeat_planner` `to_short_label` tests
+- No enforcement, no config change, no protocol change
+- `docs/server-admin-debug-commands.md` updated with sample output
+- `docs/roadmap.md` updated
+
+---
 
 ## Milestone 4.11
 

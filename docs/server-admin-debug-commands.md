@@ -32,9 +32,9 @@ Blank lines are silently ignored.
 |---|---|---|
 | `help` | Print the list of available commands. |
 | `status` | Report server running state and active policy mode (live). |
-| `sessions` | Show live per-session details from the session registry. Includes session ID, state, event count, protocol version, ready_dry_run, failed flags, and heartbeat counts (`ping_rx`, `pong_tx`). Falls back to aggregate counts when registry is unavailable. |
+| `sessions` | Show live per-session details from the session registry. Includes session ID, state, event count, protocol version, ready_dry_run, failed flags, heartbeat counts (`ping_rx`, `pong_tx`), and heartbeat health label (`heartbeat=<label>`). Falls back to aggregate counts when registry is unavailable. |
 | `resources` | Show configured announcement resource directory. |
-| `diagnostics` | Dump live session diagnostics from `SessionRegistry` snapshot. Shows session IDs, state, event count, ready_dry_run, failed, protocol version, and heartbeat counts. No IP addresses or personal data. |
+| `diagnostics` | Dump live session diagnostics from `SessionRegistry` snapshot. Shows session IDs, state, event count, ready_dry_run, failed, protocol version, heartbeat counts, and heartbeat health label. No IP addresses or personal data. |
 | `quit` | Request a clean server shutdown. |
 
 ## Output
@@ -50,12 +50,15 @@ INFO admin  message=server shutdown requested via admin command
 
 The `sessions` command shows per-session details when the registry is
 available. Heartbeat counts (`ping_rx`, `pong_tx`) are derived from the
-session event log and show zero when no heartbeat activity has occurred:
+session event log and show zero when no heartbeat activity has occurred.
+A `heartbeat=<label>` field shows the report-only planner decision for each
+session. Possible labels: `no_activity`, `healthy`, `no_pong_yet`,
+`warn_timeout`, `unhealthy`, `would_disconnect`.
 
 ```
 INFO admin  message=sessions: 2  ready_dry_run: 1  failed: 0
-   session-1: state=ReadyDryRun  events=11  ready_dry_run=true  failed=false  protocol=v1  ping_rx=4  pong_tx=4
-   session-2: state=Connected  events=3  ready_dry_run=false  failed=false  protocol=v1  ping_rx=0  pong_tx=0
+   session-1: state=ReadyDryRun  events=11  ready_dry_run=true  failed=false  protocol=v1  ping_rx=4  pong_tx=4  heartbeat=healthy
+   session-2: state=Connected  events=3  ready_dry_run=false  failed=false  protocol=v1  ping_rx=0  pong_tx=0  heartbeat=no_activity
 ```
 
 Unknown commands are logged as errors:
