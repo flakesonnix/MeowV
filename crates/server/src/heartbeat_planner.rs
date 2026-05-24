@@ -64,6 +64,18 @@ impl HeartbeatDecision {
             }
         }
     }
+
+    /// Concise single-word label for compact admin/sessions output.
+    pub fn to_short_label(&self) -> &'static str {
+        match self {
+            HeartbeatDecision::NoHeartbeatObserved => "no_activity",
+            HeartbeatDecision::Healthy => "healthy",
+            HeartbeatDecision::WouldWarnNoPongYet => "no_pong_yet",
+            HeartbeatDecision::WouldWarnTimeout => "warn_timeout",
+            HeartbeatDecision::WouldMarkUnhealthy => "unhealthy",
+            HeartbeatDecision::WouldDisconnectMissedHeartbeat => "would_disconnect",
+        }
+    }
 }
 
 /// Evaluate the heartbeat health decision from cumulative counts and an active policy.
@@ -288,6 +300,39 @@ mod tests {
         assert_eq!(
             evaluate_heartbeat(&i, &HeartbeatPolicy::ReportOnly),
             HeartbeatDecision::NoHeartbeatObserved
+        );
+    }
+
+    #[test]
+    fn to_short_label_no_heartbeat_observed() {
+        assert_eq!(HeartbeatDecision::NoHeartbeatObserved.to_short_label(), "no_activity");
+    }
+
+    #[test]
+    fn to_short_label_healthy() {
+        assert_eq!(HeartbeatDecision::Healthy.to_short_label(), "healthy");
+    }
+
+    #[test]
+    fn to_short_label_no_pong_yet() {
+        assert_eq!(HeartbeatDecision::WouldWarnNoPongYet.to_short_label(), "no_pong_yet");
+    }
+
+    #[test]
+    fn to_short_label_warn_timeout() {
+        assert_eq!(HeartbeatDecision::WouldWarnTimeout.to_short_label(), "warn_timeout");
+    }
+
+    #[test]
+    fn to_short_label_unhealthy() {
+        assert_eq!(HeartbeatDecision::WouldMarkUnhealthy.to_short_label(), "unhealthy");
+    }
+
+    #[test]
+    fn to_short_label_would_disconnect() {
+        assert_eq!(
+            HeartbeatDecision::WouldDisconnectMissedHeartbeat.to_short_label(),
+            "would_disconnect"
         );
     }
 }

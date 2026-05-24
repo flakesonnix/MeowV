@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::heartbeat_planner::{HeartbeatPlannerInput, HeartbeatPolicy, evaluate_heartbeat};
 use crate::session::SessionState;
 
 /// Opaque session identifier. Monotonic u64; never based on IP or personal data.
@@ -58,10 +59,17 @@ impl SessionRegistrySnapshot {
                 Some(v) => format!("protocol=v{}", v),
                 None => "protocol=unknown".to_string(),
             };
+            let hb_input = HeartbeatPlannerInput {
+                ping_sent: entry.ping_received_count as u64,
+                pong_received: entry.pong_sent_count as u64,
+                timeout_or_error: 0,
+            };
+            let hb_label = evaluate_heartbeat(&hb_input, &HeartbeatPolicy::ReportOnly)
+                .to_short_label();
             lines.push(format!(
-                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  ping_rx={}  pong_tx={}",
+                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  ping_rx={}  pong_tx={}  heartbeat={}",
                 entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed, proto,
-                entry.ping_received_count, entry.pong_sent_count,
+                entry.ping_received_count, entry.pong_sent_count, hb_label,
             ));
         }
         lines.join("\n")
@@ -444,5 +452,48 @@ mod tests {
         let count_before = snap.connected_sessions;
         let _ = snap.to_diagnostics_text();
         assert_eq!(snap.connected_sessions, count_before);
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_no_activity_heartbeat_for_new_session() {
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("heartbeat=no_activity"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_healthy_heartbeat_after_ping_pong() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 1, 1);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("heartbeat=healthy"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_no_pong_yet_when_ping_sent_no_pong() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 1, 0);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("heartbeat=no_pong_yet"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_unhealthy_when_pong_gap() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_session_heartbeat_counts(&id, 5, 3);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("heartbeat=unhealthy"));
+    }
+
+    #[test]
+    fn to_diagnostics_text_heartbeat_label_is_deterministic() {
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        assert_eq!(snap.to_diagnostics_text(), snap.to_diagnostics_text());
     }
 }
