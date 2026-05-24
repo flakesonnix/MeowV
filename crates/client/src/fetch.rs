@@ -85,6 +85,7 @@ pub struct FetchEntryReport {
     pub expected_size_bytes: u64,
     pub expected_sha256: String,
     pub duration_ms: u64,
+    pub manifest_outcome: ManifestOutcome,
 }
 
 impl FetchEntryReport {
@@ -97,15 +98,19 @@ impl FetchEntryReport {
             FetchOutcome::ReplaceInvalidCommitted => "replace_invalid_committed".to_string(),
             FetchOutcome::Failure(reason) => format!("failure: {reason}"),
         };
+        let manifest = match &self.manifest_outcome {
+            ManifestOutcome::Updated => " manifest=updated".to_string(),
+            ManifestOutcome::WriteFailed(msg) => format!(" manifest=write_failed:{msg}"),
+            ManifestOutcome::SkippedNoCommit => String::new(),
+        };
         format!(
-            "  [{}] {}:{} - {} ({} ms, {} bytes, sha256:{})",
-            status,
-            self.resource_name,
-            self.file_path,
-            self.source_scheme,
-            self.duration_ms,
-            self.expected_size_bytes,
-            &self.expected_sha256[..self.expected_sha256.len().min(16)],
+            "  [{status}] {res}:{path} - {scheme} ({dur_ms} ms, {size} bytes, sha256:{sha}){manifest}",
+            res = self.resource_name,
+            path = self.file_path,
+            scheme = self.source_scheme,
+            dur_ms = self.duration_ms,
+            size = self.expected_size_bytes,
+            sha = &self.expected_sha256[..self.expected_sha256.len().min(16)],
         )
     }
 }
@@ -135,6 +140,175 @@ impl FetchReport {
     pub fn to_json(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(self)?)
     }
+}
+
+/// Outcome of updating the cache metadata manifest after a commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestOutcome {
+    /// Manifest was updated successfully.
+    Updated,
+    /// Manifest write failed with an error description.
+    WriteFailed(String),
+    /// No commit occurred, so no manifest update was attempted.
+    SkippedNoCommit,
+}
+
+impl ManifestOutcome {
+    pub fn is_updated(&self) -> bool {
+        matches!(self, Self::Updated)
+    }
+}
+
+/// A single entry in the cache metadata manifest.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CacheManifestEntry {
+    pub resource_name: String,
+    pub file_path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_uri: Option<String>,
+}
+
+impl CacheManifestEntry {
+    fn sort_key(&self) -> (&str, &str) {
+        (&self.resource_name, &self.file_path)
+    }
+}
+
+/// Deterministic metadata manifest for committed cache contents.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CacheManifest {
+    /// Schema version (currently 1).
+    pub version: u64,
+    /// Committed entries, sorted deterministically by (resource_name, file_path).
+    pub entries: Vec<CacheManifestEntry>,
+}
+
+impl CacheManifest {
+    const MANIFEST_VERSION: u64 = 1;
+
+    pub fn empty() -> Self {
+        Self {
+            version: Self::MANIFEST_VERSION,
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn to_text(&self) -> String {
+        if self.entries.is_empty() {
+            return "cache manifest: (empty, no committed resources)".to_string();
+        }
+        let mut lines = vec![format!(
+            "cache manifest v{}: {} entr{}",
+            self.version,
+            self.entries.len(),
+            if self.entries.len() == 1 { "y" } else { "ies" }
+        )];
+        for entry in &self.entries {
+            let sha_prefix = &entry.sha256[..entry.sha256.len().min(16)];
+            lines.push(format!(
+                "  {}:{} ({} bytes, sha256:{})",
+                entry.resource_name, entry.file_path, entry.size_bytes, sha_prefix,
+            ));
+        }
+        lines.join("\n")
+    }
+
+    /// Merge a new entry into the manifest. If an entry with the same
+    /// (resource_name, file_path) exists, it is replaced. Entries are
+    /// re-sorted deterministically.
+    fn with_entry(mut self, entry: CacheManifestEntry) -> Self {
+        let key = entry.sort_key();
+        self.entries.retain(|e| e.sort_key() != key);
+        self.entries.push(entry);
+        self.entries.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+        self
+    }
+}
+
+/// Path to the cache manifest JSON file inside a cache directory.
+fn cache_manifest_path(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("cache_manifest.json")
+}
+
+/// Load the cache manifest from disk. Returns an empty manifest if the file
+/// does not exist or is malformed (corrupted manifest is treated as empty).
+pub async fn load_cache_manifest(cache_dir: &Path) -> CacheManifest {
+    let path = cache_manifest_path(cache_dir);
+    let data = match tokio::fs::read_to_string(&path).await {
+        Ok(d) => d,
+        Err(_) => return CacheManifest::empty(),
+    };
+    match serde_json::from_str::<CacheManifest>(&data) {
+        Ok(m) => m,
+        Err(_) => {
+            warn!(
+                "malformed cache manifest at {}, treating as empty",
+                path.display()
+            );
+            CacheManifest::empty()
+        }
+    }
+}
+
+/// Save the cache manifest to disk atomically. Writes to a temp file in the
+/// staging directory, then renames to the final path.
+pub async fn save_cache_manifest(cache_dir: &Path, manifest: &CacheManifest) -> Result<()> {
+    let staging_dir = cache_dir.join(".staging");
+    tokio::fs::create_dir_all(&staging_dir)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create staging directory for manifest: {}",
+                staging_dir.display()
+            )
+        })?;
+
+    let tmp_path = staging_dir.join("cache_manifest.json.tmp");
+    let final_path = cache_manifest_path(cache_dir);
+
+    let json =
+        serde_json::to_string_pretty(manifest).context("failed to serialize cache manifest")?;
+
+    tokio::fs::write(&tmp_path, &json)
+        .await
+        .with_context(|| format!("failed to write temp manifest: {}", tmp_path.display()))?;
+
+    tokio::fs::rename(&tmp_path, &final_path)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to rename manifest from {} to {}",
+                tmp_path.display(),
+                final_path.display()
+            )
+        })?;
+
+    info!("cache manifest updated at {}", final_path.display());
+    Ok(())
+}
+
+/// Update the cache manifest after a successful verified commit. Loads the
+/// existing manifest (or creates an empty one), inserts/replaces the entry,
+/// and saves atomically. Returns the updated manifest on success, or an error
+/// on I/O failure.
+pub async fn update_cache_manifest_after_commit(
+    cache_dir: &Path,
+    entry: &CacheManifestEntry,
+) -> std::result::Result<CacheManifest, String> {
+    let manifest = load_cache_manifest(cache_dir).await;
+    let updated = manifest.with_entry(entry.clone());
+    save_cache_manifest(cache_dir, &updated)
+        .await
+        .map_err(|e| format!("manifest write failed: {e}"))?;
+    Ok(updated)
 }
 
 /// Configuration for fetch execution and optional cache commit.
@@ -236,6 +410,7 @@ pub async fn execute_fetch_plan(
                     expected_size_bytes: expected_size,
                     expected_sha256,
                     duration_ms: 0,
+                    manifest_outcome: ManifestOutcome::SkippedNoCommit,
                 });
                 continue;
             }
@@ -306,6 +481,27 @@ pub async fn execute_fetch_plan(
         };
 
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        let manifest_outcome = if matches!(
+            final_outcome,
+            FetchOutcome::CommittedToCache | FetchOutcome::ReplaceInvalidCommitted
+        ) {
+            let manifest_entry = CacheManifestEntry {
+                resource_name: exec_entry.resource_name.clone(),
+                file_path: exec_entry.file_path.clone(),
+                sha256: expected_sha256.clone(),
+                size_bytes: expected_size,
+                source_scheme: Some(source.scheme.clone()),
+                source_uri: Some(source.uri.clone()),
+            };
+            match update_cache_manifest_after_commit(&cache_dir, &manifest_entry).await {
+                Ok(_) => ManifestOutcome::Updated,
+                Err(e) => ManifestOutcome::WriteFailed(e),
+            }
+        } else {
+            ManifestOutcome::SkippedNoCommit
+        };
+
         report_entries.push(FetchEntryReport {
             resource_name: exec_entry.resource_name.clone(),
             file_path: exec_entry.file_path.clone(),
@@ -315,6 +511,7 @@ pub async fn execute_fetch_plan(
             expected_size_bytes: expected_size,
             expected_sha256,
             duration_ms,
+            manifest_outcome,
         });
     }
 
@@ -657,7 +854,7 @@ impl serde::Serialize for FetchEntryReport {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("FetchEntryReport", 9)?;
+        let mut s = serializer.serialize_struct("FetchEntryReport", 10)?;
         s.serialize_field("resource_name", &self.resource_name)?;
         s.serialize_field("file_path", &self.file_path)?;
         s.serialize_field("source_scheme", &self.source_scheme)?;
@@ -680,6 +877,17 @@ impl serde::Serialize for FetchEntryReport {
         s.serialize_field("expected_size_bytes", &self.expected_size_bytes)?;
         s.serialize_field("expected_sha256", &self.expected_sha256)?;
         s.serialize_field("duration_ms", &self.duration_ms)?;
+        match &self.manifest_outcome {
+            ManifestOutcome::Updated => {
+                s.serialize_field("manifest_outcome", "updated")?;
+            }
+            ManifestOutcome::WriteFailed(msg) => {
+                s.serialize_field("manifest_outcome", &format!("write_failed:{msg}"))?;
+            }
+            ManifestOutcome::SkippedNoCommit => {
+                s.serialize_field("manifest_outcome", "skipped_no_commit")?;
+            }
+        }
         s.end()
     }
 }
@@ -897,6 +1105,7 @@ mod tests {
                     expected_size_bytes: 100,
                     expected_sha256: "abcdef".to_string(),
                     duration_ms: 5,
+                    manifest_outcome: ManifestOutcome::SkippedNoCommit,
                 },
                 FetchEntryReport {
                     resource_name: "admin".to_string(),
@@ -907,6 +1116,7 @@ mod tests {
                     expected_size_bytes: 200,
                     expected_sha256: "123456".to_string(),
                     duration_ms: 50,
+                    manifest_outcome: ManifestOutcome::SkippedNoCommit,
                 },
             ],
         };
@@ -928,6 +1138,7 @@ mod tests {
                 expected_size_bytes: 100,
                 expected_sha256: "abcdef".to_string(),
                 duration_ms: 5,
+                manifest_outcome: ManifestOutcome::SkippedNoCommit,
             }],
         };
         let json = report.to_json().unwrap();
@@ -989,6 +1200,274 @@ mod tests {
         assert_eq!(hash.len(), 64);
         let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         assert_eq!(hash, expected);
+    }
+
+    // --- Cache manifest unit tests ---
+
+    #[test]
+    fn test_manifest_empty() {
+        let m = CacheManifest::empty();
+        assert!(m.is_empty());
+        assert_eq!(m.version, 1);
+        assert!(m.entries.is_empty());
+        let text = m.to_text();
+        assert!(text.contains("(empty, no committed resources)"));
+    }
+
+    #[test]
+    fn test_manifest_with_entry_add() {
+        let m = CacheManifest::empty();
+        let e = CacheManifestEntry {
+            resource_name: "chat".to_string(),
+            file_path: "main.lua".to_string(),
+            sha256: "a".repeat(64),
+            size_bytes: 100,
+            source_scheme: None,
+            source_uri: None,
+        };
+        let m = m.with_entry(e);
+        assert!(!m.is_empty());
+        assert_eq!(m.entries.len(), 1);
+        assert_eq!(m.entries[0].resource_name, "chat");
+    }
+
+    #[test]
+    fn test_manifest_with_entry_replace() {
+        let m = CacheManifest::empty();
+        let e1 = CacheManifestEntry {
+            resource_name: "chat".to_string(),
+            file_path: "main.lua".to_string(),
+            sha256: "old_hash".to_string(),
+            size_bytes: 50,
+            source_scheme: None,
+            source_uri: None,
+        };
+        let m = m.with_entry(e1);
+        let e2 = CacheManifestEntry {
+            resource_name: "chat".to_string(),
+            file_path: "main.lua".to_string(),
+            sha256: "new_hash".to_string(),
+            size_bytes: 100,
+            source_scheme: Some("file".to_string()),
+            source_uri: Some("/tmp/source".to_string()),
+        };
+        let m = m.with_entry(e2);
+        assert_eq!(m.entries.len(), 1, "duplicate should replace, not add");
+        assert_eq!(m.entries[0].sha256, "new_hash");
+        assert_eq!(m.entries[0].size_bytes, 100);
+    }
+
+    #[test]
+    fn test_manifest_with_entry_order() {
+        let m = CacheManifest::empty();
+        let e1 = CacheManifestEntry {
+            resource_name: "z_resource".to_string(),
+            file_path: "a.txt".to_string(),
+            sha256: "1".to_string(),
+            size_bytes: 10,
+            source_scheme: None,
+            source_uri: None,
+        };
+        let e2 = CacheManifestEntry {
+            resource_name: "a_resource".to_string(),
+            file_path: "z.txt".to_string(),
+            sha256: "2".to_string(),
+            size_bytes: 20,
+            source_scheme: None,
+            source_uri: None,
+        };
+        let m = m.with_entry(e1).with_entry(e2);
+        assert_eq!(m.entries.len(), 2);
+        assert_eq!(m.entries[0].resource_name, "a_resource");
+        assert_eq!(m.entries[1].resource_name, "z_resource");
+    }
+
+    #[test]
+    fn test_manifest_to_text_with_entries() {
+        let m = CacheManifest::empty();
+        let e = CacheManifestEntry {
+            resource_name: "chat".to_string(),
+            file_path: "main.lua".to_string(),
+            sha256: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+            size_bytes: 200,
+            source_scheme: Some("file".to_string()),
+            source_uri: Some("/tmp/source".to_string()),
+        };
+        let m = m.with_entry(e);
+        let text = m.to_text();
+        assert!(text.contains("cache manifest v1: 1 entry"));
+        assert!(text.contains("chat:main.lua"));
+        assert!(text.contains("200 bytes"));
+    }
+
+    #[test]
+    fn test_manifest_outcome_is_updated() {
+        assert!(ManifestOutcome::Updated.is_updated());
+        assert!(!ManifestOutcome::WriteFailed("err".to_string()).is_updated());
+        assert!(!ManifestOutcome::SkippedNoCommit.is_updated());
+    }
+
+    #[tokio::test]
+    async fn test_load_cache_manifest_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = load_cache_manifest(dir.path()).await;
+        assert!(manifest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_load_cache_manifest_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache_manifest.json");
+        std::fs::write(&path, b"not valid json").unwrap();
+        let manifest = load_cache_manifest(dir.path()).await;
+        assert!(manifest.is_empty(), "malformed file should return empty");
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_cache_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = CacheManifest {
+            version: 1,
+            entries: vec![CacheManifestEntry {
+                resource_name: "chat".to_string(),
+                file_path: "main.lua".to_string(),
+                sha256: "abcdef".repeat(11),
+                size_bytes: 100,
+                source_scheme: Some("file".to_string()),
+                source_uri: Some("/tmp/source".to_string()),
+            }],
+        };
+        save_cache_manifest(dir.path(), &m).await.unwrap();
+        let loaded = load_cache_manifest(dir.path()).await;
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries[0].resource_name, "chat");
+        assert_eq!(loaded.entries[0].sha256, "abcdef".repeat(11));
+    }
+
+    #[tokio::test]
+    async fn test_save_cache_manifest_atomic_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = CacheManifest::empty();
+        save_cache_manifest(dir.path(), &m).await.unwrap();
+        // Final file should exist at cache_manifest.json
+        assert!(dir.path().join("cache_manifest.json").exists());
+        // Temp file should be cleaned up
+        assert!(
+            !dir.path()
+                .join(".staging")
+                .join("cache_manifest.json.tmp")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_cache_manifest_after_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = CacheManifestEntry {
+            resource_name: "chat".to_string(),
+            file_path: "main.lua".to_string(),
+            sha256: "a".repeat(64),
+            size_bytes: 100,
+            source_scheme: Some("file".to_string()),
+            source_uri: Some("/tmp/source".to_string()),
+        };
+        let result = update_cache_manifest_after_commit(dir.path(), &entry)
+            .await
+            .unwrap();
+        assert_eq!(result.entries.len(), 1);
+        assert_eq!(result.entries[0].resource_name, "chat");
+        // Verify on disk
+        let loaded = load_cache_manifest(dir.path()).await;
+        assert_eq!(loaded.entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_update_cache_manifest_replaces_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let e1 = CacheManifestEntry {
+            resource_name: "chat".to_string(),
+            file_path: "main.lua".to_string(),
+            sha256: "old".to_string(),
+            size_bytes: 50,
+            source_scheme: None,
+            source_uri: None,
+        };
+        update_cache_manifest_after_commit(dir.path(), &e1)
+            .await
+            .unwrap();
+        let e2 = CacheManifestEntry {
+            resource_name: "chat".to_string(),
+            file_path: "main.lua".to_string(),
+            sha256: "new".to_string(),
+            size_bytes: 200,
+            source_scheme: None,
+            source_uri: None,
+        };
+        let result = update_cache_manifest_after_commit(dir.path(), &e2)
+            .await
+            .unwrap();
+        assert_eq!(result.entries.len(), 1, "duplicate should replace");
+        assert_eq!(result.entries[0].sha256, "new");
+    }
+
+    #[tokio::test]
+    async fn test_manifest_updated_on_commit_in_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().join("cache");
+        let src_file = dir.path().join("source.dat");
+        let content = b"commit with manifest update";
+        std::fs::write(&src_file, content).unwrap();
+        let expected_sha256 = sha256_hex(content);
+
+        let source = make_source("file", &src_file.to_string_lossy());
+        let preflight_entry = make_preflight_entry(
+            "test_r",
+            "f.dat",
+            protocol::ResourceDownloadPreflightAction::FetchMissing,
+            source.clone(),
+        );
+        let preflight = protocol::ResourceDownloadPreflightPlan {
+            entries: vec![preflight_entry],
+        };
+        let announcement = make_single_resource_announcement(
+            "test_r",
+            "f.dat",
+            content.len() as u64,
+            &expected_sha256,
+        );
+
+        let config = FetchConfig {
+            allow_fetch: true,
+            allow_cache_commit: true,
+            cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+            fetch_report_path: None,
+        };
+
+        let report = execute_fetch_plan(&announcement, &preflight, &config)
+            .await
+            .unwrap();
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].outcome, FetchOutcome::CommittedToCache);
+        assert_eq!(report.entries[0].manifest_outcome, ManifestOutcome::Updated);
+
+        // Manifest should exist on disk
+        let manifest = load_cache_manifest(&cache_dir).await;
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].resource_name, "test_r");
+        assert_eq!(manifest.entries[0].file_path, "f.dat");
+    }
+
+    #[test]
+    fn test_manifest_entry_sort_key() {
+        let e = CacheManifestEntry {
+            resource_name: "b".to_string(),
+            file_path: "a".to_string(),
+            sha256: "x".to_string(),
+            size_bytes: 0,
+            source_scheme: None,
+            source_uri: None,
+        };
+        assert_eq!(e.sort_key(), ("b", "a"));
     }
 
     #[test]

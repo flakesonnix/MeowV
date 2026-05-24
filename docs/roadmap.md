@@ -78,7 +78,10 @@
 | 6.6 | Fetch source selection planning — deterministic candidate selection by priority/id/uri; selected_source and fallback_sources per preflight entry; report-only, no fetch |
 | 6.7 | Fetch source policy planning — evaluate selected source against allowed schemes; source_policy report per entry; report-only, no fetch |
 | 6.8 | Sandboxed fetch execution design — design spec for staged fetch, verification, cache commit; no implementation |
-| 6.9 | Fetch execution planner — pure/no I/O planning from preflight data; steps for resolve, stage, verify, commit; report-only |
+| 6.9  | Fetch execution planner — pure/no I/O planning from preflight data; steps for resolve, stage, verify, commit; report-only |
+| 6.10 | Staged fetch implementation — HTTP/file fetch, SHA-256 verify, sandbox guards, `--allow-fetch` opt-in |
+| 6.11 | Verified cache commit — atomic rename, replace-invalid, `--allow-cache-commit` opt-in |
+| 6.12 | Cache metadata manifest — deterministic JSON manifest after commit, atomic write, manifest outcome in report |
 
 ---
 
@@ -341,6 +344,59 @@ Fetch execution planner (pure / no I/O):
   - `fetch_execution_plan_empty_preflight`
 - No I/O, no network, no cache writes, no execution, no protocol version change
 - All existing test behavior preserved
+
+---
+
+## Milestone 6.10
+
+Staged fetch implementation:
+
+- HTTP and `file://` fetch to staging path, with sandbox guards (symlink, path traversal)
+- SHA-256 verification against announced hash and size enforcement
+- `--allow-fetch` CLI flag — opt-in required for fetch to run; without the flag, `execute_fetch_plan` returns empty report
+- `execute_fetch_plan` async function — core fetch+verify loop in `fetch.rs`
+- `FetchOutcome::StagedVerified` for successful fetch without cache commit
+- Per-entry `FetchEntryReport` with resource name, file path, source URI, duration, outcome
+- `FetchReport` aggregate with `to_text()` and `to_json()` output
+- `FetchFailureReason` enum covering 12 failure modes
+- Text and JSON fetch reports printed by client when report non-empty
+- 6 unit tests + 6 integration tests for staged fetch, hash mismatch, size exceeded, unsupported scheme, symlink rejection, report text/JSON output
+- No cache writes, no execution, no cache commit, no manifest
+
+---
+
+## Milestone 6.11
+
+Verified cache commit:
+
+- `--allow-cache-commit` CLI flag — opt-in to atomically rename staged files to cache root
+- `commit_verified_file` — atomic rename (with cross-filesystem copy fallback), sandbox guards (symlink, path traversal), parent directory creation
+- `FetchOutcome::CommittedToCache` and `ReplaceInvalidCommitted` variants
+- Staging cleanup: staged file removed after successful commit; cleanup on commit failure
+- `find_staged_file` — deterministic lookup in `.staging/` dir
+- Preflight action map to distinguish new commit vs replace-invalid outcomes
+- 8 unit tests + 7 integration tests covering: commit after fetch, no commit without gate, hash mismatch skips commit, replace invalid, symlink rejection, path traversal rejection, commit failure cleanup
+- No execution, no downloads beyond fetch milestone, no manifest
+
+---
+
+## Milestone 6.12
+
+Cache metadata manifest:
+
+- `CacheManifest` and `CacheManifestEntry` types — deterministic JSON manifest recording committed cache contents
+- `ManifestOutcome` enum — `Updated` / `WriteFailed(String)` / `SkippedNoCommit`
+- Manifest file stored at `cache_dir/cache_manifest.json`; version field (currently 1)
+- Atomic write via `save_cache_manifest` (write-to-temp + rename) for crash resilience
+- `update_cache_manifest_after_commit` — loads existing manifest (or empty), inserts/replaces entry by `(resource_name, file_path)`, saves atomically
+- Wired into `execute_fetch_plan` commit branch: manifest updated after `CommittedToCache` / `ReplaceInvalidCommitted`; `SkippedNoCommit` when no commit occurs
+- `FetchEntryReport` gains `manifest_outcome: ManifestOutcome` field; serde field count 9→10
+- Text output appends `manifest=updated` / `manifest=write_failed:...` on commit entries
+- JSON output includes `manifest_outcome` field per entry
+- Malformed or missing manifest file treated as empty (resilient recovery)
+- 12 unit tests + 5 integration tests for manifest load/save/update and full flow
+- 38 fetch unit tests + 18 fetch integration tests (641 workspace)
+- No cache eviction, no GC, no execution, no protocol version change
 
 ---
 

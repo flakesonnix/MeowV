@@ -8,10 +8,11 @@ milestone. Source metadata validation (M6.5), source selection (M6.6), source
 policy reporting (M6.7), and fetch execution planning (M6.9) exist as pure,
 report-only preflight steps.
 
-The next implementation milestone after this design is M6.10 (staged fetch
-implementation behind an explicit opt-in flag) and M6.11 (cache commit /
-atomic move after verification). M6.9 (fetch execution planner) is already
-implemented.
+Implementation milestones after this design:
+- M6.9 (fetch execution planner) ✅
+- M6.10 (staged fetch implementation) ✅
+- M6.11 (cache commit / atomic move) ✅
+- M6.12 (cache metadata manifest) ✅
 
 ## Design Goals
 
@@ -177,6 +178,9 @@ implemented.
   behind an explicit opt-in flag.
 - **M6.11**: Cache commit — atomic move after verification, cache state
   update, observability.
+- **M6.12**: Cache metadata manifest — deterministic `cache_manifest.json`
+  updated atomically after each verified commit; manifest outcome recorded
+  in fetch report; resilient to corrupted/missing manifest files.
 
 ## Future Milestone Details
 
@@ -210,6 +214,18 @@ implemented.
 - Delete staging file on success.
 - Roll back on failure (delete staging, leave cache unchanged).
 
+### M6.12 — Cache Metadata Manifest
+
+- Deterministic JSON metadata manifest (`cache_manifest.json`) recording
+  committed cache contents after each successful verified commit.
+- Atomic write via write-to-temp + rename for crash resilience.
+- Malformed or missing manifest file treated as empty (resilient recovery).
+- `ManifestOutcome` tracked per-entry in `FetchEntryReport`:
+  `Updated`, `WriteFailed(String)`, `SkippedNoCommit`.
+- Manifest entries sorted deterministically by `(resource_name, file_path)`;
+  duplicate entries are replaced on key match.
+- No cache eviction, no GC, no execution, no protocol version change.
+
 ## Hard Boundaries
 
 - Fetch never executes resources.
@@ -236,3 +252,34 @@ implemented.
 - 14 unit tests covering all action types, blocked states, text/JSON output,
   determinism, and purity guarantees.
 - 183 protocol tests / 541 workspace tests total.
+
+### M6.10 — Staged Fetch Implementation ✅
+
+- HTTP and `file://` fetch to staging path in `fetch_and_verify_single_file`.
+- SHA-256 verification against announced hash; size enforcement.
+- `--allow-fetch` CLI flag — fetch only runs when explicitly enabled.
+- `execute_fetch_plan` async function with per-entry fetch+verify loop.
+- `FetchOutcome::StagedVerified`, `FetchFailureReason` (12 variants),
+  `FetchEntryReport`, `FetchReport` with `to_text()` / `to_json()`.
+- Sandbox guards: symlink rejection, path traversal rejection.
+- 6 unit tests + 6 integration tests.
+
+### M6.11 — Verified Cache Commit ✅
+
+- `--allow-cache-commit` CLI flag — opt-in for atomic rename from staging.
+- `commit_verified_file` — atomic rename with cross-filesystem copy fallback.
+- `FetchOutcome::CommittedToCache` and `ReplaceInvalidCommitted` variants.
+- Staging cleaned after commit; cleaned on commit failure.
+- 8 unit tests + 7 integration tests.
+
+### M6.12 — Cache Metadata Manifest ✅
+
+- `CacheManifest` / `CacheManifestEntry` types — deterministic JSON manifest
+  at `cache_dir/cache_manifest.json` (version 1).
+- Atomic write via `save_cache_manifest` (write-to-temp + rename).
+- `update_cache_manifest_after_commit` — loads, inserts/replaces, saves.
+- `ManifestOutcome` on `FetchEntryReport`; serde field count 9→10.
+- Text/JSON output includes manifest outcome on commit entries.
+- Malformed or missing manifest treated as empty (resilient recovery).
+- 12 unit tests + 5 integration tests.
+- 38 fetch unit tests, 18 fetch integration tests, 641 workspace.
