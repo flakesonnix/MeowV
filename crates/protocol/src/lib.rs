@@ -203,6 +203,135 @@ pub struct AnnouncedResourceFile {
     pub relative_path: String,
     pub size_bytes: u64,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<ResourceFetchSource>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceFetchSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub scheme: String,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrors: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceFetchMetadataError {
+    UnsupportedScheme(String),
+    DigestMismatch { expected: String, found: String },
+    SizeMismatch { expected: u64, found: u64 },
+    DuplicateSource { scheme: String, uri: String },
+    PathTraversalInFileUri(String),
+}
+
+impl std::fmt::Display for ResourceFetchMetadataError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResourceFetchMetadataError::UnsupportedScheme(s) => write!(f, "unsupported scheme: {s}"),
+            
+            ResourceFetchMetadataError::DigestMismatch { expected, found } => write!(
+                f,
+                "digest mismatch: expected {expected}, found {found}"
+            ),
+            ResourceFetchMetadataError::SizeMismatch { expected, found } => write!(
+                f,
+                "size mismatch: expected {expected}, found {found}"
+            ),
+            ResourceFetchMetadataError::DuplicateSource { scheme, uri } => {
+                write!(f, "duplicate source: {}:{}", scheme, uri)
+            }
+            ResourceFetchMetadataError::PathTraversalInFileUri(s) => write!(
+                f,
+                "file:// uri contains path traversal or suspicious components: {s}"
+            ),
+        }
+    }
+}
+
+/// Validate and produce a deterministically-ordered list of sources for a file.
+///
+/// Rules implemented here are intentionally conservative and deterministic:
+/// - allowed schemes: https, file, ipfs
+/// - if a source includes sha256/size they must match the announced file-level values
+/// - duplicate (scheme+uri) entries are rejected
+/// - file:// URIs containing ".." are rejected as path-traversal
+/// - returned list is sorted by (priority asc, id asc, uri asc)
+pub fn validate_and_order_sources(
+    file: &AnnouncedResourceFile,
+) -> Result<Vec<ResourceFetchSource>, ResourceFetchMetadataError> {
+    let sources = match &file.sources {
+        None => return Ok(Vec::new()),
+        Some(s) => s.clone(),
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    for s in &sources {
+        // scheme validation
+        let scheme = s.scheme.as_str();
+        match scheme {
+            "https" | "file" | "ipfs" => {}
+            other => return Err(ResourceFetchMetadataError::UnsupportedScheme(other.to_string())),
+        }
+
+        // duplicate check
+        let key = (s.scheme.clone(), s.uri.clone());
+        if seen.contains(&key) {
+            return Err(ResourceFetchMetadataError::DuplicateSource {
+                scheme: s.scheme.clone(),
+                uri: s.uri.clone(),
+            });
+        }
+        seen.insert(key);
+
+        // file:// path traversal check (simple heuristic)
+        if s.scheme == "file" && s.uri.contains("..") {
+            return Err(ResourceFetchMetadataError::PathTraversalInFileUri(
+                s.uri.clone(),
+            ));
+        }
+
+        // If source provides sha256/size they must match file-level values
+        if let Some(ref sha) = s.sha256 {
+            if sha != &file.sha256 {
+                return Err(ResourceFetchMetadataError::DigestMismatch {
+                    expected: file.sha256.clone(),
+                    found: sha.clone(),
+                });
+            }
+        }
+        if let Some(size) = s.size_bytes {
+            if size != file.size_bytes {
+                return Err(ResourceFetchMetadataError::SizeMismatch {
+                    expected: file.size_bytes,
+                    found: size,
+                });
+            }
+        }
+    }
+
+    // deterministic ordering by (priority asc, id asc, uri asc)
+    let mut normalized = sources;
+    normalized.sort_by(|a, b| {
+        let pa = a.priority.unwrap_or(100);
+        let pb = b.priority.unwrap_or(100);
+        pa.cmp(&pb)
+            .then(a.id.clone().unwrap_or_default().cmp(&b.id.clone().unwrap_or_default()))
+            .then(a.uri.cmp(&b.uri))
+    });
+
+    Ok(normalized)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1333,6 +1462,7 @@ mod tests {
                     relative_path: "resource.toml".to_string(),
                     size_bytes: 123,
                     sha256: "abc".to_string(),
+                    sources: None,
                 }],
                 protocol_version: PROTOCOL_VERSION,
                 requirement_level: ResourceRequirementLevel::Required,
@@ -1597,6 +1727,7 @@ mod tests {
                         relative_path: "a.txt".to_string(),
                         size_bytes: 1,
                         sha256: "a".to_string(),
+                        sources: None,
                     }],
                     protocol_version: PROTOCOL_VERSION,
                     requirement_level: ResourceRequirementLevel::Required,
@@ -1608,6 +1739,7 @@ mod tests {
                         relative_path: "b.txt".to_string(),
                         size_bytes: 1,
                         sha256: "b".to_string(),
+                        sources: None,
                     }],
                     protocol_version: PROTOCOL_VERSION,
                     requirement_level: ResourceRequirementLevel::Required,
@@ -2179,6 +2311,7 @@ mod tests {
                         relative_path: "b.txt".to_string(),
                         size_bytes: 1,
                         sha256: "b".to_string(),
+                        sources: None,
                     }],
                     protocol_version: PROTOCOL_VERSION,
                     requirement_level: ResourceRequirementLevel::Required,
@@ -2190,6 +2323,7 @@ mod tests {
                         relative_path: "a.txt".to_string(),
                         size_bytes: 1,
                         sha256: "a".to_string(),
+                        sources: None,
                     }],
                     protocol_version: PROTOCOL_VERSION,
                     requirement_level: ResourceRequirementLevel::Required,
@@ -2224,6 +2358,7 @@ mod tests {
                     relative_path: "resource.toml".to_string(),
                     size_bytes: 123,
                     sha256: "abc".to_string(),
+                    sources: None,
                 }],
                 protocol_version: PROTOCOL_VERSION,
                 requirement_level,
@@ -2567,11 +2702,13 @@ mod tests {
                             relative_path: "b.txt".to_string(),
                             size_bytes: 2,
                             sha256: "b".to_string(),
+                            sources: None,
                         },
                         AnnouncedResourceFile {
                             relative_path: "a.txt".to_string(),
                             size_bytes: 1,
                             sha256: "a".to_string(),
+                            sources: None,
                         },
                     ],
                     protocol_version: PROTOCOL_VERSION,
@@ -2584,6 +2721,7 @@ mod tests {
                         relative_path: "c.txt".to_string(),
                         size_bytes: 3,
                         sha256: "c".to_string(),
+                        sources: None,
                     }],
                     protocol_version: PROTOCOL_VERSION,
                     requirement_level: ResourceRequirementLevel::Required,
@@ -2640,17 +2778,20 @@ mod tests {
 
     fn sample_plan_announcement() -> ResourceAnnouncement {
         ResourceAnnouncement {
-            resources: vec![AnnouncedResource {
-                name: "chat".to_string(),
-                version: "0.1.0".to_string(),
-                files: vec![AnnouncedResourceFile {
-                    relative_path: "resource.toml".to_string(),
-                    size_bytes: 123,
-                    sha256: "abc".to_string(),
-                }],
-                protocol_version: PROTOCOL_VERSION,
-                requirement_level: ResourceRequirementLevel::Required,
-            }],
+            resources: vec![
+                AnnouncedResource {
+                    name: "chat".to_string(),
+                    version: "0.1.0".to_string(),
+                    files: vec![AnnouncedResourceFile {
+                        relative_path: "resource.toml".to_string(),
+                        size_bytes: 123,
+                        sha256: "abc".to_string(),
+                        sources: None,
+                    }],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Required,
+                },
+            ],
             signature: Some(ResourceAnnouncementSignature {
                 algorithm: "ed25519".to_string(),
                 key_id: "dev-key".to_string(),
@@ -2676,6 +2817,7 @@ mod tests {
                         relative_path: "resource.toml".to_string(),
                         size_bytes: 123,
                         sha256: "abc".to_string(),
+                        sources: None,
                     }],
                     protocol_version: PROTOCOL_VERSION,
                     requirement_level: ResourceRequirementLevel::Required,
@@ -2694,6 +2836,280 @@ mod tests {
                 signature: "c29tZS1zaWc=".to_string(),
             }),
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Resource fetch metadata validation tests (M6.4)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn validate_and_order_sources_deterministic_sort() {
+        let file = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 10,
+            sha256: "deadbeef".to_string(),
+            sources: Some(vec![
+                ResourceFetchSource {
+                    id: Some("b".to_string()),
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/z".to_string(),
+                    size_bytes: Some(10),
+                    sha256: Some("deadbeef".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: Some(50),
+                    mirrors: None,
+                },
+                ResourceFetchSource {
+                    id: Some("a".to_string()),
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/a".to_string(),
+                    size_bytes: Some(10),
+                    sha256: Some("deadbeef".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: Some(10),
+                    mirrors: None,
+                },
+                ResourceFetchSource {
+                    id: Some("a".to_string()),
+                    scheme: "https".to_string(),
+                    uri: "https://example.com/b".to_string(),
+                    size_bytes: Some(10),
+                    sha256: Some("deadbeef".to_string()),
+                    compression: None,
+                    media_type: None,
+                    priority: Some(10),
+                    mirrors: None,
+                },
+            ]),
+        };
+
+        let ordered = validate_and_order_sources(&file).unwrap();
+        let uris: Vec<String> = ordered.into_iter().map(|s| s.uri).collect();
+        assert_eq!(uris, vec![
+            "https://example.com/a".to_string(),
+            "https://example.com/b".to_string(),
+            "https://example.com/z".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn validate_and_order_sources_rejects_unsupported_scheme() {
+        let file = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 1,
+            sha256: "x".to_string(),
+            sources: Some(vec![ResourceFetchSource {
+                id: None,
+                scheme: "http".to_string(),
+                uri: "http://example/1".to_string(),
+                size_bytes: None,
+                sha256: None,
+                compression: None,
+                media_type: None,
+                priority: None,
+                mirrors: None,
+            }]),
+        };
+
+        let err = validate_and_order_sources(&file).unwrap_err();
+        match err {
+            ResourceFetchMetadataError::UnsupportedScheme(s) => assert!(s == "http"),
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_and_order_sources_rejects_duplicate_source() {
+        let file = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 1,
+            sha256: "x".to_string(),
+            sources: Some(vec![
+                ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://a".to_string(),
+                    size_bytes: None,
+                    sha256: None,
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                },
+                ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://a".to_string(),
+                    size_bytes: None,
+                    sha256: None,
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                },
+            ]),
+        };
+
+        let err = validate_and_order_sources(&file).unwrap_err();
+        match err {
+            ResourceFetchMetadataError::DuplicateSource { scheme, uri } => {
+                assert_eq!(scheme, "https");
+                assert_eq!(uri, "https://a")
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_and_order_sources_rejects_size_mismatch() {
+        let file = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 100,
+            sha256: "abc".to_string(),
+            sources: Some(vec![ResourceFetchSource {
+                id: None,
+                scheme: "https".to_string(),
+                uri: "https://a".to_string(),
+                size_bytes: Some(99),
+                sha256: Some("abc".to_string()),
+                compression: None,
+                media_type: None,
+                priority: None,
+                mirrors: None,
+            }]),
+        };
+
+        let err = validate_and_order_sources(&file).unwrap_err();
+        match err {
+            ResourceFetchMetadataError::SizeMismatch { expected, found } => {
+                assert_eq!(expected, 100);
+                assert_eq!(found, 99);
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_and_order_sources_rejects_sha_mismatch() {
+        let file = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 1,
+            sha256: "abc".to_string(),
+            sources: Some(vec![ResourceFetchSource {
+                id: None,
+                scheme: "https".to_string(),
+                uri: "https://a".to_string(),
+                size_bytes: Some(1),
+                sha256: Some("zzz".to_string()),
+                compression: None,
+                media_type: None,
+                priority: None,
+                mirrors: None,
+            }]),
+        };
+
+        let err = validate_and_order_sources(&file).unwrap_err();
+        match err {
+            ResourceFetchMetadataError::DigestMismatch { expected, found } => {
+                assert_eq!(expected, "abc".to_string());
+                assert_eq!(found, "zzz".to_string());
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_and_order_sources_rejects_file_path_traversal() {
+        let file = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 1,
+            sha256: "a".to_string(),
+            sources: Some(vec![ResourceFetchSource {
+                id: None,
+                scheme: "file".to_string(),
+                uri: "file:///tmp/../etc/passwd".to_string(),
+                size_bytes: None,
+                sha256: None,
+                compression: None,
+                media_type: None,
+                priority: None,
+                mirrors: None,
+            }]),
+        };
+
+        let err = validate_and_order_sources(&file).unwrap_err();
+        match err {
+            ResourceFetchMetadataError::PathTraversalInFileUri(s) => assert!(s.contains("..")),
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_and_order_sources_missing_sources_ok() {
+        let file_none = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 1,
+            sha256: "a".to_string(),
+            sources: None,
+        };
+        let file_empty = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 1,
+            sha256: "a".to_string(),
+            sources: Some(vec![]),
+        };
+
+        assert_eq!(validate_and_order_sources(&file_none).unwrap().len(), 0);
+        assert_eq!(validate_and_order_sources(&file_empty).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn validate_and_order_sources_allowed_schemes_ok() {
+        let file = AnnouncedResourceFile {
+            relative_path: "f.txt".to_string(),
+            size_bytes: 2,
+            sha256: "a".to_string(),
+            sources: Some(vec![
+                ResourceFetchSource {
+                    id: None,
+                    scheme: "https".to_string(),
+                    uri: "https://a".to_string(),
+                    size_bytes: None,
+                    sha256: None,
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                },
+                ResourceFetchSource {
+                    id: None,
+                    scheme: "file".to_string(),
+                    uri: "file:///tmp/x".to_string(),
+                    size_bytes: None,
+                    sha256: None,
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                },
+                ResourceFetchSource {
+                    id: None,
+                    scheme: "ipfs".to_string(),
+                    uri: "ipfs://Qm...".to_string(),
+                    size_bytes: None,
+                    sha256: None,
+                    compression: None,
+                    media_type: None,
+                    priority: None,
+                    mirrors: None,
+                },
+            ]),
+        };
+
+        let res = validate_and_order_sources(&file).unwrap();
+        assert_eq!(res.len(), 3);
     }
 
     #[test]
