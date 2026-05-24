@@ -75,6 +75,7 @@
 | 5.4 | Capability enforcement UX / invariants — document operator-visible ReportOnly vs Strict guarantees, clarify capability-vs-protocol rejection boundaries, and add invariant coverage without behavior change |
 | 6.0 | Resource download preflight / safe fetch planning — pure deterministic report-only planner for fetch/replace/block actions; no network, no writes, no execution |
 | 6.5 | Fetch source metadata preflight reporting — validate source schemes, deduplicate, sort; per-entry source_errors and valid_sources in preflight output; report-only, no fetch |
+| 6.6 | Fetch source selection planning — deterministic candidate selection by priority/id/uri; selected_source and fallback_sources per preflight entry; report-only, no fetch |
 
 ---
 
@@ -206,6 +207,34 @@ Fetch source metadata preflight reporting:
 - 6 new protocol unit tests (150 protocol tests total, 508 workspace)
 - No fetch, no network access, no cache writes, no execution, no protocol version change
 - All existing test behavior preserved (sample files have `sources: None` — no source metadata = no source errors, zero validated sources)
+
+---
+
+## Milestone 6.6
+
+Fetch source selection planning:
+
+- `ResourceDownloadPreflightEntry` extended with two new fields:
+  - `selected_source: Option<ResourceFetchSource>` — the best candidate source, selected deterministically
+  - `fallback_sources: Vec<ResourceFetchSource>` — remaining valid sources after primary selection
+- `select_fetch_source(valid_sources)` — pure deterministic function; selects first entry from already-sorted valid sources (lowest priority, then id, then uri) as primary; remaining sources become fallbacks
+- Fields use `#[serde(default, skip_serializing_if = "Option::is_none")]` and `#[serde(default, skip_serializing_if = "Vec::is_empty")]` — backward-compatible JSON
+- Text output shows:
+  - `selected source: <scheme> <uri>` per entry
+  - `fallback sources: N` per entry (when non-empty)
+- JSON output includes `selected_source` and `fallback_sources` per entry via serde
+- 9 new protocol unit tests (159 protocol tests total, 517 workspace):
+  - `select_fetch_source_lowest_priority_selected` — lower priority wins
+  - `select_fetch_source_tie_break_by_id` — same priority, lower id wins
+  - `select_fetch_source_tie_break_by_uri` — same priority+id, lower uri wins
+  - `select_fetch_source_empty_returns_none` — empty input produces no selection
+  - `preflight_selected_source_in_text` — selected source and fallback count in text
+  - `preflight_no_selected_source_when_none_valid` — no selection when all sources invalid
+  - `preflight_selected_source_no_behavior_change` — selection does not alter action/reason
+  - `preflight_selected_source_deterministic_output` — output is reproducible
+  - `preflight_selected_source_json_serialization` — JSON round-trips, missing fields deserialize to defaults
+- No fetch, no network access, no cache writes, no execution, no protocol version change
+- All existing test behavior preserved
 
 ---
 
