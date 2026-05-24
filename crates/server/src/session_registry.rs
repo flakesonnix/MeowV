@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::heartbeat_planner::{HeartbeatPlannerInput, HeartbeatPolicy, evaluate_heartbeat};
+use crate::heartbeat_planner::{
+    HeartbeatPlannerInput, HeartbeatPolicy, ServerHeartbeatPlannerInput, evaluate_heartbeat,
+    evaluate_server_heartbeat,
+};
 use crate::session::SessionState;
 
 /// Opaque session identifier. Monotonic u64; never based on IP or personal data.
@@ -69,12 +72,18 @@ impl SessionRegistrySnapshot {
             };
             let hb_label = evaluate_heartbeat(&hb_input, &self.heartbeat_policy)
                 .to_short_label();
+            let srv_hb_input = ServerHeartbeatPlannerInput {
+                pings_sent: entry.server_ping_sent_count as u64,
+                pongs_received: entry.server_pong_received_count as u64,
+            };
+            let srv_hb_label = evaluate_server_heartbeat(&srv_hb_input, &self.heartbeat_policy)
+                .to_short_label();
             lines.push(format!(
-                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  ping_rx={}  pong_tx={}  srv_ping_tx={}  srv_pong_rx={}  heartbeat={}",
+                "  {}: state={:?}  events={}  ready_dry_run={}  failed={}  {}  ping_rx={}  pong_tx={}  srv_ping_tx={}  srv_pong_rx={}  heartbeat={}  srv_heartbeat={}",
                 entry.id, entry.state, entry.event_count, entry.ready_dry_run, entry.failed, proto,
                 entry.ping_received_count, entry.pong_sent_count,
                 entry.server_ping_sent_count, entry.server_pong_received_count,
-                hb_label,
+                hb_label, srv_hb_label,
             ));
         }
         lines.join("\n")
@@ -524,6 +533,61 @@ mod tests {
         reg.create_session();
         let snap = reg.snapshot();
         assert_eq!(snap.to_diagnostics_text(), snap.to_diagnostics_text());
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_no_activity_srv_heartbeat_for_new_session() {
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("srv_heartbeat=no_activity"), "text: {text}");
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_healthy_srv_heartbeat_after_ping_pong() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(&id, 3, 3);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("srv_heartbeat=healthy"), "text: {text}");
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_awaiting_pong_when_no_reply() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(&id, 2, 0);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("srv_heartbeat=awaiting_pong"), "text: {text}");
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_missed_pong_when_gap() {
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(&id, 5, 3);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("srv_heartbeat=missed_pong"), "text: {text}");
+    }
+
+    #[test]
+    fn to_diagnostics_text_shows_would_disconnect_under_strict_at_threshold() {
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::Strict);
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(&id, 3, 0);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(text.contains("srv_heartbeat=would_disconnect"), "text: {text}");
+    }
+
+    #[test]
+    fn to_diagnostics_text_report_only_never_shows_would_disconnect_for_srv_heartbeat() {
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::ReportOnly);
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(&id, 10, 0);
+        let text = reg.snapshot().to_diagnostics_text();
+        assert!(!text.contains("srv_heartbeat=would_disconnect"), "text: {text}");
     }
 
     #[test]

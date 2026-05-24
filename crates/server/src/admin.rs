@@ -550,4 +550,65 @@ mod tests {
         let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
         assert!(result.message.contains("heartbeat=unhealthy"));
     }
+
+    #[test]
+    fn sessions_shows_no_activity_srv_heartbeat_for_new_session() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.create_session();
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("srv_heartbeat=no_activity"));
+    }
+
+    #[test]
+    fn sessions_shows_healthy_srv_heartbeat_when_all_pongs_received() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(&id, 3, 3);
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("srv_heartbeat=healthy"));
+    }
+
+    #[test]
+    fn sessions_shows_awaiting_pong_srv_heartbeat_when_no_reply() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(&id, 2, 0);
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("srv_heartbeat=awaiting_pong"));
+    }
+
+    #[test]
+    fn sessions_shows_would_disconnect_srv_heartbeat_under_strict_at_threshold() {
+        use crate::heartbeat_planner::{HeartbeatPolicy, MISSED_SERVER_PONG_DISCONNECT_THRESHOLD};
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        reg.set_heartbeat_policy(HeartbeatPolicy::Strict);
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(
+            &id,
+            MISSED_SERVER_PONG_DISCONNECT_THRESHOLD as usize,
+            0,
+        );
+        let snap = reg.snapshot();
+        let result = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert!(result.message.contains("srv_heartbeat=would_disconnect"));
+    }
+
+    #[test]
+    fn sessions_srv_heartbeat_output_is_deterministic() {
+        use crate::session_registry::SessionRegistry;
+        let mut reg = SessionRegistry::new();
+        let id = reg.create_session();
+        reg.update_server_heartbeat_counts(&id, 2, 1);
+        let snap = reg.snapshot();
+        let r1 = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        let r2 = handle_admin_command_with_context(AdminCommand::Sessions, None, Some(&snap));
+        assert_eq!(r1.message, r2.message);
+    }
 }

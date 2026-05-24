@@ -17,7 +17,8 @@ pub use config::{
 pub use enforcement::{SessionEnforcementDecision, SessionEnforcementPolicy, evaluate_enforcement};
 pub use heartbeat_planner::{
     HeartbeatDecision, HeartbeatPlannerInput, HeartbeatPolicy, MISSED_HEARTBEAT_DISCONNECT_THRESHOLD,
-    evaluate_heartbeat,
+    MISSED_SERVER_PONG_DISCONNECT_THRESHOLD, ServerHeartbeatDecision, ServerHeartbeatPlannerInput,
+    evaluate_heartbeat, evaluate_server_heartbeat,
 };
 pub use session_registry::{
     SessionId, SessionRegistry, SessionRegistryEntry, SessionRegistrySnapshot,
