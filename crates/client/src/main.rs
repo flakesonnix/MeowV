@@ -362,6 +362,7 @@ async fn main() -> Result<()> {
     if read_flag_exists(&args, "--heartbeat-enabled") {
         let interval_ms: u64 = read_flag(&args, "--heartbeat-interval-ms").and_then(|s| s.parse().ok()).unwrap_or(5000);
         let timeout_ms: u64 = read_flag(&args, "--heartbeat-timeout-ms").and_then(|s| s.parse().ok()).unwrap_or(2000);
+        let heartbeat_policy = parse_heartbeat_policy(&args);
 
         let writer = std::sync::Arc::new(tokio::sync::Mutex::new(writer_half));
         let lines_arc = std::sync::Arc::new(tokio::sync::Mutex::new(lines));
@@ -372,6 +373,7 @@ async fn main() -> Result<()> {
 
         // Spawn the heartbeat loop and keep the JoinHandle so we can await it on
         // shutdown. The loop itself listens on `stop_rx` for a shutdown request.
+        // Under Strict policy the loop may also stop on its own via enforcement.
         let hb_handle = tokio::spawn(async move {
             client::heartbeat_loop(
                 hb_writer,
@@ -379,6 +381,7 @@ async fn main() -> Result<()> {
                 Duration::from_millis(interval_ms),
                 Duration::from_millis(timeout_ms),
                 stop_rx,
+                heartbeat_policy,
             )
             .await
         });
@@ -394,6 +397,12 @@ async fn main() -> Result<()> {
         // request heartbeat stop and wait for the task to finish
         let _ = stop_tx.send(());
         if let Ok(metrics) = hb_handle.await {
+            if metrics.enforcement_disconnect {
+                eprintln!(
+                    "heartbeat enforcement: strict policy disconnected after {} missed heartbeats",
+                    metrics.timeout_or_error_count
+                );
+            }
             println!("heartbeat summary:\n{}", metrics.to_text());
         }
     }
@@ -953,6 +962,13 @@ fn parse_signature_policy(args: &[String]) -> SignaturePolicy {
     match read_flag(args, "--signature-policy").as_deref() {
         Some("strict") => SignaturePolicy::Strict,
         _ => SignaturePolicy::ReportOnly,
+    }
+}
+
+fn parse_heartbeat_policy(args: &[String]) -> client::ClientHeartbeatPolicy {
+    match read_flag(args, "--heartbeat-policy").as_deref() {
+        Some("strict") => client::ClientHeartbeatPolicy::Strict,
+        _ => client::ClientHeartbeatPolicy::ReportOnly,
     }
 }
 
