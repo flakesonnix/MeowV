@@ -80,5 +80,12 @@ Server-initiated direction (M4.16 stub — inert):
 - `ServerMessage::ServerPing { sequence: u64 }` and `ClientMessage::ServerPong { sequence: u64 }` added as inert DTOs.
 - Wire type tags: `"server_ping"` and `"server_pong"` — no collision with `"ping"` / `"pong"`.
 - Server handler arm logs receipt at `info` level; no timer, no enforcement, no tracking.
-- Future milestone (M4.17) will wire the server-side scheduler: server sends `ServerPing` on interval, tracks missed `ServerPong` replies, disconnects under `Strict` when threshold reached.
+- No client-side reply behavior yet — added in M4.17.
+
+Client Responds to ServerPing (M4.17):
+
+- `client::handle_server_ping(writer, sequence)` — public async fn in `lib.rs`; sends `ClientMessage::ServerPong { sequence }`.
+- Main receive loop in `main.rs` handles `ServerMessage::ServerPing { sequence }` arm: replies with `ServerPong` and logs at `info`.
+- `heartbeat::send_ping_and_wait_with_timeout` intercepts `ServerPing` while waiting for a client-initiated `Pong`: replies inline, then continues waiting for the matching `Pong`. Sequence fidelity is preserved — each `ServerPong` echoes the `ServerPing` sequence exactly.
+- Future milestone (M4.18+) will wire the server-side scheduler: server sends `ServerPing` on interval, tracks missed `ServerPong` replies, disconnects under `Strict` when threshold reached.
 - This is the authoritative liveness path: server owns the timer and measures directly — no trust assumption on client-reported data.

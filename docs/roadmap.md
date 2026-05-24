@@ -62,6 +62,20 @@
 | 4.14 | Strict heartbeat enforcement wiring — `ClientHeartbeatPolicy` enum; client-side `heartbeat_loop` enforces disconnect at threshold under `Strict`; `--heartbeat-policy` CLI flag; `enforcement_disconnect` field on `HeartbeatMetrics`; 7 new tests |
 | 4.15 | Heartbeat authority design — document why server-side enforcement is unreachable today; compare client-reported health vs server-initiated Ping; recommend server-initiated path for future enforcement; design doc only, no live changes |
 | 4.16 | Server-initiated heartbeat protocol stub — add `ServerMessage::ServerPing` and `ClientMessage::ServerPong` DTOs; server handler ignores `ServerPong` (inert); 8 round-trip tests; no timer, no enforcement |
+| 4.17 | Client responds to ServerPing — client receive loop and heartbeat path reply `ServerPong(sequence)` to `ServerPing(sequence)`; `handle_server_ping` public helper; 5 integration tests |
+
+---
+
+## Milestone 4.17
+
+Client responds to ServerPing:
+
+- `client::handle_server_ping(writer, sequence)` — public async helper in `lib.rs`; sends `ClientMessage::ServerPong { sequence }`
+- Main receive loop in `main.rs` handles `ServerMessage::ServerPing` arm; replies and logs at info level
+- `heartbeat::send_ping_and_wait_with_timeout` intercepts interleaved `ServerPing` while waiting for a `Pong`; replies inline and continues waiting
+- 5 integration tests (`tests/server_heartbeat.rs`): single ping elicits pong, multiple pings get matching pongs in order, sequence 0 round-trips, ServerPing interleaved during heartbeat wait is handled transparently, unrelated server messages not disrupted
+- No server-side timer, no timeout tracking, no disconnect, no enforcement
+- Docs: `client-heartbeat.md` updated; `roadmap.md` updated
 
 ---
 
