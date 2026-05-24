@@ -82,6 +82,7 @@
 | 6.10 | Staged fetch implementation — HTTP/file fetch, SHA-256 verify, sandbox guards, `--allow-fetch` opt-in |
 | 6.11 | Verified cache commit — atomic rename, replace-invalid, `--allow-cache-commit` opt-in |
 | 6.12 | Cache metadata manifest — deterministic JSON manifest after commit, atomic write, manifest outcome in report |
+| 6.13 | Cache reconciliation planner — pure/no I/O comparison of manifest, cache filesystem, and announcement; orphan detection, hash mismatch, corrupted manifest recovery; report-only |
 
 ---
 
@@ -397,6 +398,21 @@ Cache metadata manifest:
 - 12 unit tests + 5 integration tests for manifest load/save/update and full flow
 - 38 fetch unit tests + 18 fetch integration tests (641 workspace)
 - No cache eviction, no GC, no execution, no protocol version change
+
+### M6.13 — Cache Reconciliation Planner ✅
+
+- Pure deterministic reconciliation between three sources: cache manifest, cache filesystem, and resource announcement
+- `CacheReconciliationAction` enum with 10 variants: `AlreadyConsistent`, `MissingManifestEntry`, `MissingCacheFile`, `HashMismatch`, `OrphanedCacheFile`, `ManifestCorrupted`, `AnnouncementMissing`, `WouldRepairManifest`, `WouldRemoveOrphan`, `WouldRefetch`
+- `CacheReconciliationPlan` with `to_text()` / `to_json()` output, `entry_count()`, `unhealthy_count()`, `is_empty()`
+- `scan_cache_directory()` — async recursive scanner with deterministic ordering, excludes `cache_manifest.json` and `.staging/`
+- `build_cache_reconciliation_plan()` — pure function taking `(&CacheManifest, &[CacheFileEntry], &ResourceAnnouncement, bool)`
+- `reconcile_cache()` — convenience wrapper that loads manifest, scans cache, detects corruption, calls planner
+- `ManifestCorrupted` flag: when set, all manifest entries treated as absent; files in cache+announcement get `ManifestCorrupted` not `MissingManifestEntry`
+- Announcement-only entries (not in manifest or cache) silently skipped — fetch planner territory
+- Deterministic ordering by `(resource_name, file_path)` via tuple-keyed `BTreeMap`
+- No I/O inside planner, no cache mutation, no repair execution, no network, no runtime activation
+- 22 unit tests: empty, consistent, missing manifest entry, missing cache file, hash mismatch, orphan, announcement missing, corrupted flag, deterministic ordering, labels, healthy check, text/JSON output, combined issues, duplicate keys, stability
+- 60 client unit tests, 625 workspace tests passing
 
 ---
 

@@ -181,6 +181,9 @@ Implementation milestones after this design:
 - **M6.12**: Cache metadata manifest — deterministic `cache_manifest.json`
   updated atomically after each verified commit; manifest outcome recorded
   in fetch report; resilient to corrupted/missing manifest files.
+- **M6.13**: Cache reconciliation planner — pure/no I/O comparison of
+  manifest, cache filesystem, and announcement; orphan detection, hash
+  mismatch, corrupted manifest recovery; report-only.
 
 ## Future Milestone Details
 
@@ -225,6 +228,25 @@ Implementation milestones after this design:
 - Manifest entries sorted deterministically by `(resource_name, file_path)`;
   duplicate entries are replaced on key match.
 - No cache eviction, no GC, no execution, no protocol version change.
+
+### M6.13 — Cache Reconciliation Planner
+
+- Pure deterministic comparison of three state sources:
+  - `CacheManifest` — committed file records from fetch pipeline
+  - `CacheFileEntry[]` — actual files scanned from cache directory (recursive, skips `cache_manifest.json` and `.staging/`)
+  - `ResourceAnnouncement` — server-advertised expected resource set
+- `build_cache_reconciliation_plan()`: pure function, all inputs as refs, no I/O
+- `reconcile_cache()`: convenience wrapper (loads manifest, scans cache, calls planner)
+- Action variants: `AlreadyConsistent`, `MissingManifestEntry`, `MissingCacheFile`,
+  `HashMismatch`, `OrphanedCacheFile`, `ManifestCorrupted`, `AnnouncementMissing`,
+  `WouldRepairManifest`, `WouldRemoveOrphan`, `WouldRefetch`
+- `ManifestCorrupted` flag: treats all manifest entries as absent; files in
+  cache+announcement get `ManifestCorrupted` action instead of `MissingManifestEntry`
+- Announcement-only entries silently skipped (fetch planner territory)
+- Deterministic ordering by `(resource_name, file_path)` tuple key
+- Text and JSON report output via `to_text()` / `to_json()`
+- 22 unit tests, no integration tests, no CLI flags
+- No repair execution, no cache mutation, no network, no runtime activation
 
 ## Hard Boundaries
 
@@ -283,3 +305,16 @@ Implementation milestones after this design:
 - Malformed or missing manifest treated as empty (resilient recovery).
 - 12 unit tests + 5 integration tests.
 - 38 fetch unit tests, 18 fetch integration tests, 641 workspace.
+
+### M6.13 — Cache Reconciliation Planner ✅
+
+- `CacheReconciliationAction` / `CacheReconciliationPlan` / `CacheReconciliationEntry`
+  types in `crates/client/src/reconciliation.rs` (public module).
+- `scan_cache_directory()` async scanner — recursive, excludes `cache_manifest.json`
+  and `.staging/`, SHA-256 hash via `hash_file_sha256`.
+- `build_cache_reconciliation_plan()` — pure planner; BTreeMap-based keyed
+  joins across manifest, cache, announcement; deterministic ordering.
+- `reconcile_cache()` convenience wrapper for live use.
+- No I/O inside planner, no cache mutation, no repair execution.
+- 22 unit tests: all action variants, ordering, output formats, stability.
+- 60 client unit tests, 625 workspace tests passing.
