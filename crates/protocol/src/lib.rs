@@ -282,6 +282,62 @@ pub struct SignatureVerificationReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceDownloadPreflightAction {
+    AlreadyAvailable,
+    FetchMissing,
+    ReplaceInvalid,
+    BlockedBySignaturePolicy,
+    BlockedByResourcePolicy,
+    UnsupportedResource,
+    WouldVerifyAfterFetch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceDownloadPreflightEntry {
+    pub resource_name: String,
+    pub file_path: String,
+    pub action: ResourceDownloadPreflightAction,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceDownloadPreflightPlan {
+    pub entries: Vec<ResourceDownloadPreflightEntry>,
+}
+
+impl ResourceDownloadPreflightPlan {
+    pub fn to_text(&self) -> String {
+        if self.entries.is_empty() {
+            return "resource download preflight: (empty)".to_string();
+        }
+        let mut lines = vec![format!(
+            "resource download preflight: {} entr{}",
+            self.entries.len(),
+            if self.entries.len() == 1 { "y" } else { "ies" }
+        )];
+        for entry in &self.entries {
+            lines.push(format!(
+                "  [{}] {}:{} - {}",
+                match entry.action {
+                    ResourceDownloadPreflightAction::AlreadyAvailable => "already_available",
+                    ResourceDownloadPreflightAction::FetchMissing => "fetch_missing",
+                    ResourceDownloadPreflightAction::ReplaceInvalid => "replace_invalid",
+                    ResourceDownloadPreflightAction::BlockedBySignaturePolicy => "blocked_by_signature_policy",
+                    ResourceDownloadPreflightAction::BlockedByResourcePolicy => "blocked_by_resource_policy",
+                    ResourceDownloadPreflightAction::UnsupportedResource => "unsupported_resource",
+                    ResourceDownloadPreflightAction::WouldVerifyAfterFetch => "would_verify_after_fetch",
+                },
+                entry.resource_name,
+                entry.file_path,
+                entry.reason,
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Login {
@@ -668,6 +724,107 @@ pub fn check_announcement_signature_stub(
             },
         },
     }
+}
+
+pub fn build_resource_download_preflight_plan(
+    announcement: &ResourceAnnouncement,
+    availability: &ResourceAvailabilityReport,
+    signature: &SignatureVerificationReport,
+    signature_policy: &signature_engine::SignaturePolicy,
+    policy_evaluation: Option<&ResourcePolicyEvaluation>,
+) -> ResourceDownloadPreflightPlan {
+    let mut entries = Vec::new();
+
+    let blocked_by_signature = matches!(signature_policy, signature_engine::SignaturePolicy::Strict)
+        && !matches!(signature.status, SignatureVerificationStatus::Valid);
+    let blocked_by_resource_policy = policy_evaluation
+        .map(|evaluation| evaluation.decision == ResourceJoinDecision::Blocked)
+        .unwrap_or(false);
+
+    let availability_map = availability
+        .resources
+        .iter()
+        .map(|entry| {
+            (
+                (entry.resource_name.as_str(), entry.file_path.as_str()),
+                entry.status.clone(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    for resource in &announcement.resources {
+        let unsupported = resource.protocol_version != PROTOCOL_VERSION;
+        for file in &resource.files {
+            let key = (resource.name.as_str(), file.relative_path.as_str());
+            let status = availability_map.get(&key);
+            let (action, reason) = if unsupported {
+                (
+                    ResourceDownloadPreflightAction::UnsupportedResource,
+                    format!(
+                        "resource protocol_version {} does not match client {}",
+                        resource.protocol_version, PROTOCOL_VERSION
+                    ),
+                )
+            } else if blocked_by_signature {
+                (
+                    ResourceDownloadPreflightAction::BlockedBySignaturePolicy,
+                    signature.reason.clone(),
+                )
+            } else if blocked_by_resource_policy {
+                (
+                    ResourceDownloadPreflightAction::BlockedByResourcePolicy,
+                    policy_evaluation
+                        .map(|evaluation| format!("resource policy decision: {:?}", evaluation.decision))
+                        .unwrap_or_else(|| "resource policy blocked".to_string()),
+                )
+            } else {
+                match status {
+                    Some(ResourceAvailabilityStatus::Available) => (
+                        ResourceDownloadPreflightAction::AlreadyAvailable,
+                        "resource file already available locally".to_string(),
+                    ),
+                    Some(ResourceAvailabilityStatus::Missing) | None => (
+                        ResourceDownloadPreflightAction::FetchMissing,
+                        "resource file missing from local cache".to_string(),
+                    ),
+                    Some(ResourceAvailabilityStatus::SizeMismatch)
+                    | Some(ResourceAvailabilityStatus::HashMismatch) => (
+                        ResourceDownloadPreflightAction::ReplaceInvalid,
+                        "resource file present but invalid locally".to_string(),
+                    ),
+                }
+            };
+
+            entries.push(ResourceDownloadPreflightEntry {
+                resource_name: resource.name.clone(),
+                file_path: file.relative_path.clone(),
+                action,
+                reason,
+            });
+
+            if !blocked_by_signature
+                && !blocked_by_resource_policy
+                && !unsupported
+                && matches!(status, Some(ResourceAvailabilityStatus::Missing))
+            {
+                entries.push(ResourceDownloadPreflightEntry {
+                    resource_name: resource.name.clone(),
+                    file_path: file.relative_path.clone(),
+                    action: ResourceDownloadPreflightAction::WouldVerifyAfterFetch,
+                    reason: "downloaded file would require post-fetch verification".to_string(),
+                });
+            }
+        }
+    }
+
+    entries.sort_by(|a, b| {
+        a.resource_name
+            .cmp(&b.resource_name)
+            .then(a.file_path.cmp(&b.file_path))
+            .then(format!("{:?}", a.action).cmp(&format!("{:?}", b.action)))
+    });
+
+    ResourceDownloadPreflightPlan { entries }
 }
 
 // ---------------------------------------------------------------------------
@@ -1850,6 +2007,156 @@ mod tests {
         );
         assert_eq!(report.to_text(), report.to_text());
         assert!(report.to_text().contains("capability_negotiation_decision: would_reject"));
+    }
+
+    #[test]
+    fn resource_download_preflight_all_available() {
+        let announcement = sample_announcement(ResourceRequirementLevel::Required);
+        let report = sample_report(ResourceAvailabilityStatus::Available);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        assert_eq!(plan.entries.len(), 1);
+        assert_eq!(plan.entries[0].action, ResourceDownloadPreflightAction::AlreadyAvailable);
+    }
+
+    #[test]
+    fn resource_download_preflight_missing_file_fetch_and_verify() {
+        let announcement = sample_announcement(ResourceRequirementLevel::Required);
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        assert_eq!(plan.entries.len(), 2);
+        assert_eq!(plan.entries[0].action, ResourceDownloadPreflightAction::FetchMissing);
+        assert_eq!(plan.entries[1].action, ResourceDownloadPreflightAction::WouldVerifyAfterFetch);
+    }
+
+    #[test]
+    fn resource_download_preflight_invalid_file_replace() {
+        let announcement = sample_announcement(ResourceRequirementLevel::Required);
+        let report = sample_report(ResourceAvailabilityStatus::HashMismatch);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        assert_eq!(plan.entries[0].action, ResourceDownloadPreflightAction::ReplaceInvalid);
+    }
+
+    #[test]
+    fn resource_download_preflight_strict_signature_blocks() {
+        let announcement = sample_announcement(ResourceRequirementLevel::Required);
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Invalid,
+                reason: "signature invalid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::Strict,
+            None,
+        );
+        assert_eq!(
+            plan.entries[0].action,
+            ResourceDownloadPreflightAction::BlockedBySignaturePolicy
+        );
+    }
+
+    #[test]
+    fn resource_download_preflight_resource_policy_blocks() {
+        let announcement = sample_announcement(ResourceRequirementLevel::Required);
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let evaluation = ResourcePolicyEvaluation {
+            decision: ResourceJoinDecision::Blocked,
+            missing_required: vec!["chat:resource.toml".to_string()],
+            invalid_required: vec![],
+            missing_optional: vec![],
+            invalid_optional: vec![],
+            missing_recommended: vec![],
+            invalid_recommended: vec![],
+        };
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            Some(&evaluation),
+        );
+        assert_eq!(
+            plan.entries[0].action,
+            ResourceDownloadPreflightAction::BlockedByResourcePolicy
+        );
+    }
+
+    #[test]
+    fn resource_download_preflight_ordering_deterministic() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![
+                AnnouncedResource {
+                    name: "zeta".to_string(),
+                    version: "1.0.0".to_string(),
+                    files: vec![AnnouncedResourceFile {
+                        relative_path: "b.txt".to_string(),
+                        size_bytes: 1,
+                        sha256: "b".to_string(),
+                    }],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Required,
+                },
+                AnnouncedResource {
+                    name: "alpha".to_string(),
+                    version: "1.0.0".to_string(),
+                    files: vec![AnnouncedResourceFile {
+                        relative_path: "a.txt".to_string(),
+                        size_bytes: 1,
+                        sha256: "a".to_string(),
+                    }],
+                    protocol_version: PROTOCOL_VERSION,
+                    requirement_level: ResourceRequirementLevel::Required,
+                },
+            ],
+            signature: None,
+        };
+        let report = ResourceAvailabilityReport {
+            resources: vec![],
+            is_fully_available: false,
+        };
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        assert_eq!(plan.entries[0].resource_name, "alpha");
+        assert_eq!(plan.to_text(), plan.to_text());
     }
 
     fn sample_announcement(requirement_level: ResourceRequirementLevel) -> ResourceAnnouncement {
