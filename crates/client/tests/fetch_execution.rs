@@ -96,8 +96,12 @@ fn fetch_missing_file_via_file_source_reports_success() {
         entries: vec![preflight_entry],
     };
 
-    let announcement =
-        make_single_resource_announcement("test_resource", "test.dat", content.len() as u64, &expected_sha);
+    let announcement = make_single_resource_announcement(
+        "test_resource",
+        "test.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -190,7 +194,12 @@ fn fetch_hash_mismatch_cleans_staging() {
 
     // Announcement has WRONG sha256
     let wrong_sha = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
-    let announcement = make_single_resource_announcement("test_r", "bad_hash.dat", content.len() as u64, &wrong_sha);
+    let announcement = make_single_resource_announcement(
+        "test_r",
+        "bad_hash.dat",
+        content.len() as u64,
+        &wrong_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -244,7 +253,12 @@ fn fetch_report_to_text_includes_all_entries() {
         entries: vec![preflight_entry],
     };
 
-    let announcement = make_single_resource_announcement("report_r", "r.dat", content.len() as u64, &expected_sha);
+    let announcement = make_single_resource_announcement(
+        "report_r",
+        "r.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -286,7 +300,12 @@ fn fetch_report_json_is_valid() {
         entries: vec![preflight_entry],
     };
 
-    let announcement = make_single_resource_announcement("json_r", "j.dat", content.len() as u64, &expected_sha);
+    let announcement = make_single_resource_announcement(
+        "json_r",
+        "j.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -332,8 +351,12 @@ fn fetch_commits_to_cache_when_allowed() {
         entries: vec![preflight_entry],
     };
 
-    let announcement =
-        make_single_resource_announcement("commit_r", "committed.dat", content.len() as u64, &expected_sha);
+    let announcement = make_single_resource_announcement(
+        "commit_r",
+        "committed.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -388,8 +411,12 @@ fn fetch_replace_invalid_commits_to_cache() {
         entries: vec![preflight_entry],
     };
 
-    let announcement =
-        make_single_resource_announcement("replace_r", "stale.dat", content.len() as u64, &expected_sha);
+    let announcement = make_single_resource_announcement(
+        "replace_r",
+        "stale.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -436,7 +463,12 @@ fn fetch_hash_mismatch_does_not_commit() {
 
     // Wrong sha256 so it will mismatch
     let wrong_sha = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
-    let announcement = make_single_resource_announcement("bad_hash_r", "bad.dat", content.len() as u64, &wrong_sha);
+    let announcement = make_single_resource_announcement(
+        "bad_hash_r",
+        "bad.dat",
+        content.len() as u64,
+        &wrong_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -483,8 +515,12 @@ fn fetch_committed_file_content_is_correct() {
         entries: vec![preflight_entry],
     };
 
-    let announcement =
-        make_single_resource_announcement("verify_r", "subdir/verified.dat", content.len() as u64, &expected_sha);
+    let announcement = make_single_resource_announcement(
+        "verify_r",
+        "subdir/verified.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -532,7 +568,8 @@ fn fetch_commit_report_to_text() {
         entries: vec![preflight_entry],
     };
 
-    let announcement = make_single_resource_announcement("text_r", "t.dat", content.len() as u64, &expected_sha);
+    let announcement =
+        make_single_resource_announcement("text_r", "t.dat", content.len() as u64, &expected_sha);
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -547,7 +584,10 @@ fn fetch_commit_report_to_text() {
         .unwrap();
 
     let text = report.to_text();
-    assert!(text.contains("committed_to_cache"), "report should mention committed_to_cache");
+    assert!(
+        text.contains("committed_to_cache"),
+        "report should mention committed_to_cache"
+    );
     assert!(text.contains("resource fetch: 1 entry"));
 }
 
@@ -573,7 +613,8 @@ fn fetch_commit_report_json() {
         entries: vec![preflight_entry],
     };
 
-    let announcement = make_single_resource_announcement("json_r2", "j2.dat", content.len() as u64, &expected_sha);
+    let announcement =
+        make_single_resource_announcement("json_r2", "j2.dat", content.len() as u64, &expected_sha);
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -620,7 +661,12 @@ fn fetch_replace_invalid_report_to_text() {
         entries: vec![preflight_entry],
     };
 
-    let announcement = make_single_resource_announcement("rep_text_r", "old.dat", content.len() as u64, &expected_sha);
+    let announcement = make_single_resource_announcement(
+        "rep_text_r",
+        "old.dat",
+        content.len() as u64,
+        &expected_sha,
+    );
 
     let config = FetchConfig {
         allow_fetch: true,
@@ -635,5 +681,8 @@ fn fetch_replace_invalid_report_to_text() {
         .unwrap();
 
     let text = report.to_text();
-    assert!(text.contains("replace_invalid_committed"), "report should mention replace_invalid_committed");
+    assert!(
+        text.contains("replace_invalid_committed"),
+        "report should mention replace_invalid_committed"
+    );
 }
