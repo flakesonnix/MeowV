@@ -440,6 +440,14 @@ pub struct ResourceDownloadPreflightEntry {
     pub file_path: String,
     pub action: ResourceDownloadPreflightAction,
     pub reason: String,
+    /// Validation errors from source metadata, if any.
+    /// Empty when sources are absent, valid, or not checked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_errors: Vec<String>,
+    /// Deterministically-ordered list of valid fetch sources.
+    /// Empty when no sources are declared or validation fails.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub valid_sources: Vec<ResourceFetchSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -476,6 +484,17 @@ impl ResourceDownloadPreflightPlan {
                 entry.file_path,
                 entry.reason,
             ));
+            if !entry.source_errors.is_empty() {
+                for err in &entry.source_errors {
+                    lines.push(format!("    source error: {}", err));
+                }
+            }
+            if !entry.valid_sources.is_empty() {
+                lines.push(format!(
+                    "    sources: {} validated",
+                    entry.valid_sources.len()
+                ));
+            }
         }
         lines.join("\n")
     }
@@ -926,6 +945,13 @@ pub fn build_resource_download_preflight_plan(
         for file in &resource.files {
             let key = (resource.name.as_str(), file.relative_path.as_str());
             let status = availability_map.get(&key);
+
+            // Evaluate source metadata (report-only, never fetches)
+            let (source_errors, valid_sources) = match validate_and_order_sources(file) {
+                Ok(sources) => (Vec::new(), sources),
+                Err(e) => (vec![e.to_string()], Vec::new()),
+            };
+
             let (action, reason) = if unsupported {
                 (
                     ResourceDownloadPreflightAction::UnsupportedResource,
@@ -971,6 +997,8 @@ pub fn build_resource_download_preflight_plan(
                 file_path: file.relative_path.clone(),
                 action,
                 reason,
+                source_errors: source_errors.clone(),
+                valid_sources: valid_sources.clone(),
             });
 
             if !blocked_by_signature
@@ -983,6 +1011,8 @@ pub fn build_resource_download_preflight_plan(
                     file_path: file.relative_path.clone(),
                     action: ResourceDownloadPreflightAction::WouldVerifyAfterFetch,
                     reason: "downloaded file would require post-fetch verification".to_string(),
+                    source_errors: source_errors.clone(),
+                    valid_sources: valid_sources.clone(),
                 });
             }
         }
@@ -2355,6 +2385,387 @@ mod tests {
         );
         assert_eq!(plan.entries[0].resource_name, "alpha");
         assert_eq!(plan.to_text(), plan.to_text());
+    }
+
+    // -------------------------------------------------------------------
+    // Resource download preflight — source metadata reporting (M6.5)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn preflight_sources_valid_in_text() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![
+                        ResourceFetchSource {
+                            id: Some("primary".to_string()),
+                            scheme: "https".to_string(),
+                            uri: "https://cdn.example.com/resource.toml".to_string(),
+                            size_bytes: Some(123),
+                            sha256: Some("abc".to_string()),
+                            compression: None,
+                            media_type: None,
+                            priority: Some(10),
+                            mirrors: None,
+                        },
+                        ResourceFetchSource {
+                            id: Some("fallback".to_string()),
+                            scheme: "https".to_string(),
+                            uri: "https://backup.example.com/resource.toml".to_string(),
+                            size_bytes: Some(123),
+                            sha256: Some("abc".to_string()),
+                            compression: None,
+                            media_type: None,
+                            priority: Some(20),
+                            mirrors: None,
+                        },
+                    ]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let text = plan.to_text();
+        assert!(
+            text.contains("sources: 2 validated"),
+            "text should show validated source count:\n{text}"
+        );
+    }
+
+    #[test]
+    fn preflight_sources_valid_in_json() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: Some("cdn".to_string()),
+                        scheme: "https".to_string(),
+                        uri: "https://cdn.example.com/resource.toml".to_string(),
+                        size_bytes: Some(123),
+                        sha256: Some("abc".to_string()),
+                        compression: None,
+                        media_type: None,
+                        priority: Some(10),
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let json = serde_json::to_string_pretty(&plan).unwrap();
+        assert!(
+            json.contains("valid_sources"),
+            "JSON should include valid_sources:\n{json}"
+        );
+        assert!(
+            json.contains("https://cdn.example.com/resource.toml"),
+            "JSON should include source URI:\n{json}"
+        );
+    }
+
+    #[test]
+    fn preflight_sources_invalid_scheme_in_text() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: None,
+                        scheme: "http".to_string(),
+                        uri: "http://insecure.example.com/resource.toml".to_string(),
+                        size_bytes: None,
+                        sha256: None,
+                        compression: None,
+                        media_type: None,
+                        priority: None,
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let text = plan.to_text();
+        assert!(
+            text.contains("source error"),
+            "text should contain error for invalid scheme:\n{text}"
+        );
+        assert!(
+            text.contains("unsupported scheme: http"),
+            "text should name unsupported scheme:\n{text}"
+        );
+    }
+
+    #[test]
+    fn preflight_sources_duplicate_in_text() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![
+                        ResourceFetchSource {
+                            id: None,
+                            scheme: "https".to_string(),
+                            uri: "https://example.com/resource.toml".to_string(),
+                            size_bytes: None,
+                            sha256: None,
+                            compression: None,
+                            media_type: None,
+                            priority: None,
+                            mirrors: None,
+                        },
+                        ResourceFetchSource {
+                            id: None,
+                            scheme: "https".to_string(),
+                            uri: "https://example.com/resource.toml".to_string(),
+                            size_bytes: None,
+                            sha256: None,
+                            compression: None,
+                            media_type: None,
+                            priority: None,
+                            mirrors: None,
+                        },
+                    ]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        let text = plan.to_text();
+        assert!(
+            text.contains("source error"),
+            "text should contain error for duplicate source:\n{text}"
+        );
+        assert!(
+            text.contains("duplicate source"),
+            "text should mention duplicate:\n{text}"
+        );
+    }
+
+    #[test]
+    fn preflight_sources_no_behavior_change() {
+        // Verify that source metadata does NOT alter the action, reason,
+        // entry count, or availability logic.
+        let announcement_with_sources = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![ResourceFetchSource {
+                        id: None,
+                        scheme: "https".to_string(),
+                        uri: "https://example.com/resource.toml".to_string(),
+                        size_bytes: None,
+                        sha256: None,
+                        compression: None,
+                        media_type: None,
+                        priority: None,
+                        mirrors: None,
+                    }]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let announcement_no_sources = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: None,
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+
+        for status in &[
+            ResourceAvailabilityStatus::Available,
+            ResourceAvailabilityStatus::Missing,
+            ResourceAvailabilityStatus::SizeMismatch,
+            ResourceAvailabilityStatus::HashMismatch,
+        ] {
+            let report = sample_report(status.clone());
+            let plan_with = build_resource_download_preflight_plan(
+                &announcement_with_sources,
+                &report,
+                &SignatureVerificationReport {
+                    status: SignatureVerificationStatus::Valid,
+                    reason: "signature valid".to_string(),
+                },
+                &signature_engine::SignaturePolicy::ReportOnly,
+                None,
+            );
+            let plan_without = build_resource_download_preflight_plan(
+                &announcement_no_sources,
+                &report,
+                &SignatureVerificationReport {
+                    status: SignatureVerificationStatus::Valid,
+                    reason: "signature valid".to_string(),
+                },
+                &signature_engine::SignaturePolicy::ReportOnly,
+                None,
+            );
+            for (entry_with, entry_without) in
+                plan_with.entries.iter().zip(plan_without.entries.iter())
+            {
+                assert_eq!(
+                    entry_with.action, entry_without.action,
+                    "action should match for status={:?}",
+                    status
+                );
+                assert_eq!(
+                    entry_with.reason, entry_without.reason,
+                    "reason should match for status={:?}",
+                    status
+                );
+            }
+            assert_eq!(
+                plan_with.entries.len(),
+                plan_without.entries.len(),
+                "entry count should match for status={:?}",
+                status
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_sources_deterministic_output() {
+        let announcement = ResourceAnnouncement {
+            resources: vec![AnnouncedResource {
+                name: "chat".to_string(),
+                version: "0.1.0".to_string(),
+                files: vec![AnnouncedResourceFile {
+                    relative_path: "resource.toml".to_string(),
+                    size_bytes: 123,
+                    sha256: "abc".to_string(),
+                    sources: Some(vec![
+                        ResourceFetchSource {
+                            id: Some("z".to_string()),
+                            scheme: "https".to_string(),
+                            uri: "https://z.example.com/f".to_string(),
+                            size_bytes: Some(123),
+                            sha256: Some("abc".to_string()),
+                            compression: None,
+                            media_type: None,
+                            priority: Some(50),
+                            mirrors: None,
+                        },
+                        ResourceFetchSource {
+                            id: Some("a".to_string()),
+                            scheme: "https".to_string(),
+                            uri: "https://a.example.com/f".to_string(),
+                            size_bytes: Some(123),
+                            sha256: Some("abc".to_string()),
+                            compression: None,
+                            media_type: None,
+                            priority: Some(10),
+                            mirrors: None,
+                        },
+                    ]),
+                }],
+                protocol_version: PROTOCOL_VERSION,
+                requirement_level: ResourceRequirementLevel::Required,
+            }],
+            signature: None,
+        };
+        let report = sample_report(ResourceAvailabilityStatus::Missing);
+        let plan = build_resource_download_preflight_plan(
+            &announcement,
+            &report,
+            &SignatureVerificationReport {
+                status: SignatureVerificationStatus::Valid,
+                reason: "signature valid".to_string(),
+            },
+            &signature_engine::SignaturePolicy::ReportOnly,
+            None,
+        );
+        assert_eq!(
+            plan.to_text(),
+            plan.to_text(),
+            "text output is deterministic"
+        );
+        let json = serde_json::to_string_pretty(&plan).unwrap();
+        assert_eq!(
+            json,
+            serde_json::to_string_pretty(&plan).unwrap(),
+            "JSON output is deterministic"
+        );
     }
 
     fn sample_announcement(requirement_level: ResourceRequirementLevel) -> ResourceAnnouncement {
