@@ -145,4 +145,18 @@ pub async fn perform_ping_once(
     Ok(())
 }
 
+/// Reply to a server-initiated ServerPing by sending ClientMessage::ServerPong
+/// with the same sequence number. This is the client's half of the authoritative
+/// liveness path added in M4.16/M4.17.
+pub async fn handle_server_ping(
+    writer: &mut OwnedWriteHalf,
+    sequence: u64,
+) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt as _;
+    writer
+        .write_all(protocol::encode_line(&protocol::ClientMessage::ServerPong { sequence })?.as_bytes())
+        .await?;
+    Ok(())
+}
+
 // Keep binary in src/main.rs unchanged; lib only exposes small helpers for tests.

@@ -352,6 +352,11 @@ async fn main() -> Result<()> {
             ServerMessage::JoinGateDecision(decision) => {
                 print_join_gate_decision(&decision);
             }
+            ServerMessage::ServerPing { sequence } => {
+                let pong = encode_line(&ClientMessage::ServerPong { sequence })?;
+                writer_half.write_all(pong.as_bytes()).await?;
+                info!(sequence, "replied to server heartbeat ping");
+            }
             other => {
                 info!(packet = ?other, "received packet");
             }

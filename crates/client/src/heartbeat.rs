@@ -39,7 +39,12 @@ pub async fn send_ping_and_wait_with_timeout(
         let packet = decode_server_line(&line)?;
         match packet {
             ServerMessage::Pong { sequence: got } if got == sequence => return Ok(()),
-            // Skip other messages
+            ServerMessage::ServerPing { sequence: srv_seq } => {
+                let pong = encode_line(&ClientMessage::ServerPong { sequence: srv_seq });
+                if let Ok(line) = pong {
+                    let _ = writer.write_all(line.as_bytes()).await;
+                }
+            }
             _ => continue,
         }
     }
