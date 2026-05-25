@@ -1,5 +1,6 @@
 // Library facade for the client crate so integration tests can access helpers.
 pub mod fetch;
+pub mod hash;
 pub mod heartbeat;
 pub mod journal;
 pub mod lock;

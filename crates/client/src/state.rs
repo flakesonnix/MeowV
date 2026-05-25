@@ -140,7 +140,7 @@ impl std::error::Error for ReplayViewError {}
 
 /// Canonical JSON hash — single implementation used everywhere.
 /// Serializes to JSON then SHA-256 hashes; returns `"sha256:<hex>"`.
-pub fn canonical_hash(value: &impl Serialize) -> Result<String> {
+pub fn canonical_hash<T: Serialize + ?Sized>(value: &T) -> Result<String> {
     use sha2::Digest;
     let json = serde_json::to_string(value)?;
     let digest = sha2::Sha256::digest(json.as_bytes());
