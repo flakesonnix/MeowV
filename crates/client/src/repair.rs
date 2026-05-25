@@ -8,6 +8,7 @@ use crate::reconciliation::{
     CacheReconciliationAction, CacheReconciliationPlan, build_cache_reconciliation_plan,
     scan_cache_directory,
 };
+use crate::trust::{Announcement, Trusted};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheRepairAction {
@@ -372,11 +373,15 @@ pub async fn plan_cache_repair(
     Ok((reconciliation, repair))
 }
 
+/// Execute a cache repair plan. Requires `Announcement<Trusted>` — callers that have
+/// not completed the trust state machine (`Unverified → Parsed → PolicyChecked → Trusted`)
+/// will not compile. No repair mutation may begin from an unverified announcement.
 pub async fn execute_cache_repair(
-    announcement: &ResourceAnnouncement,
+    announcement: &Announcement<Trusted>,
     repair_plan: &CacheRepairPlan,
     config: &CacheRepairConfig,
 ) -> Result<CacheRepairExecutionReport> {
+    let announcement = announcement.as_announcement();
     let cache_dir = match &config.cache_dir {
         Some(path) => std::path::PathBuf::from(path),
         None => {

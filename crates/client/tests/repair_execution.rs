@@ -3,6 +3,15 @@ use client::repair::{
     CacheRepairConfig, CacheRepairOutcome, build_cache_repair_plan, execute_cache_repair,
 };
 use client::reconciliation::{CacheFileEntry, build_cache_reconciliation_plan};
+use client::trust::{Announcement, Unverified};
+
+fn make_trusted(
+    ann: protocol::ResourceAnnouncement,
+) -> Announcement<client::trust::Trusted> {
+    Announcement::<Unverified>::from_constructed(ann)
+        .skip_policy_check()
+        .trust_relaxed()
+}
 use protocol::{
     AnnouncedResource, AnnouncedResourceFile, PROTOCOL_VERSION, ResourceAnnouncement,
     ResourceFetchSource, ResourceRequirementLevel,
@@ -115,7 +124,7 @@ fn repair_dry_run_does_not_mutate_cache() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let report = rt
         .block_on(execute_cache_repair(
-            &announcement,
+            &make_trusted(announcement.clone()),
             &repair_plan,
             &CacheRepairConfig {
                 dry_run: true,
@@ -164,7 +173,7 @@ fn repair_manifest_entry_updates_manifest() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let report = rt
         .block_on(execute_cache_repair(
-            &announcement,
+            &make_trusted(announcement.clone()),
             &repair_plan,
             &CacheRepairConfig {
                 dry_run: false,
@@ -220,7 +229,7 @@ fn repair_missing_file_refetches_into_cache() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let report = rt
         .block_on(execute_cache_repair(
-            &announcement,
+            &make_trusted(announcement.clone()),
             &repair_plan,
             &CacheRepairConfig {
                 dry_run: false,
@@ -279,7 +288,7 @@ fn repair_hash_mismatch_replaces_file() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let report = rt
         .block_on(execute_cache_repair(
-            &announcement,
+            &make_trusted(announcement.clone()),
             &repair_plan,
             &CacheRepairConfig {
                 dry_run: false,
@@ -333,7 +342,7 @@ fn repair_both_flags_false_produces_blocked_outcome() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let report = rt
         .block_on(execute_cache_repair(
-            &announcement,
+            &make_trusted(announcement.clone()),
             &repair_plan,
             &CacheRepairConfig {
                 dry_run: false,
@@ -375,7 +384,7 @@ fn repair_missing_cache_dir_returns_blocked() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let report = rt
         .block_on(execute_cache_repair(
-            &announcement,
+            &make_trusted(announcement.clone()),
             &repair_plan,
             &CacheRepairConfig {
                 dry_run: false,

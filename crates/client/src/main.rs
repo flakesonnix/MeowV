@@ -1214,38 +1214,28 @@ async fn print_execute_cache_repair(
 
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read announcement file: {path}"))?;
-    let announcement: ResourceAnnouncement =
-        serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
 
-    // Load and parse trusted keys — not just check existence.
-    // Unvalidated → Parsed boundary: keys must be readable and structurally valid before
-    // the announcement is trusted enough to drive repair mutations.
+    // Load and parse trusted keys before any trust resolution.
     let trusted_keys: Option<Vec<TrustedPublicKey>> = match read_flag(args, "--trusted-keys") {
-        Some(ref path) => Some(load_trusted_keys(path)?),
+        Some(ref kpath) => Some(load_trusted_keys(kpath)?),
         None => None,
     };
 
-    match (policy, &trusted_keys) {
-        (SignaturePolicy::Strict, None) => {
-            anyhow::bail!("--signature-policy strict requires --trusted-keys <path>");
-        }
-        (SignaturePolicy::Strict, Some(keys)) if keys.is_empty() => {
-            anyhow::bail!(
-                "--signature-policy strict requires at least one trusted key; \
-                 key file was empty or contained no valid entries"
-            );
-        }
-        _ => {}
-    }
+    // Full trust state machine: Unverified → Parsed → PolicyChecked → Trusted.
+    // execute_cache_repair only accepts Announcement<Trusted> — no valid state
+    // means this call does not compile.
+    let trusted_announcement =
+        client::trust::resolve_announcement_trust(&raw, policy, trusted_keys.as_deref())
+            .context("announcement trust resolution failed")?;
 
     let (_reconciliation, repair_plan) = client::repair::plan_cache_repair(
         std::path::Path::new(&resource_cache),
-        &announcement,
+        trusted_announcement.as_announcement(),
     )
     .await?;
 
     let report = client::repair::execute_cache_repair(
-        &announcement,
+        &trusted_announcement,
         &repair_plan,
         &client::repair::CacheRepairConfig {
             dry_run: read_flag_exists(args, "--dry-run"),
