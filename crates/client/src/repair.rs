@@ -339,10 +339,13 @@ pub fn build_cache_repair_plan(
     }
 }
 
+/// Plan a cache repair. Requires `Announcement<Trusted>` — repair strategy is shaped by
+/// announcement content; untrusted announcements must not influence mutation intent.
 pub async fn plan_cache_repair(
     cache_dir: &std::path::Path,
-    announcement: &ResourceAnnouncement,
+    announcement: &Announcement<Trusted>,
 ) -> Result<(CacheReconciliationPlan, CacheRepairPlan)> {
+    let announcement = announcement.as_announcement();
     let manifest = crate::fetch::load_cache_manifest(cache_dir).await;
     let manifest_path = cache_dir.join("cache_manifest.json");
     let manifest_corrupted = if manifest_path.exists() && manifest.is_empty() {

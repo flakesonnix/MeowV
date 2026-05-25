@@ -1230,7 +1230,7 @@ async fn print_execute_cache_repair(
 
     let (_reconciliation, repair_plan) = client::repair::plan_cache_repair(
         std::path::Path::new(&resource_cache),
-        trusted_announcement.as_announcement(),
+        &trusted_announcement,
     )
     .await?;
 
