@@ -316,7 +316,7 @@ async fn replay_rejects_hash_chain_break() {
         "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
 
     // Write both entries manually (je1 untouched, je2 with tampered prev_entry_hash).
-    let lines = vec![
+    let lines = [
         serde_json::to_string(&je1).unwrap(),
         serde_json::to_string(&je2).unwrap(),
     ];
