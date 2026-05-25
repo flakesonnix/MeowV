@@ -219,6 +219,20 @@ async fn main() -> Result<()> {
         );
     }
 
+    if let Some(path) = read_flag(&args, "--execute-cache-repair") {
+        let output_format =
+            read_flag(&args, "--repair-output").unwrap_or_else(|| "text".to_string());
+        let output_file = read_flag(&args, "--repair-output-file");
+        return print_execute_cache_repair(
+            &path,
+            &args,
+            &signature_policy,
+            &output_format,
+            output_file.as_deref(),
+        )
+        .await;
+    }
+
     let allow_fetch = read_flag_exists(&args, "--allow-fetch");
     let fetch_report_path = read_flag(&args, "--fetch-report");
 
@@ -1186,6 +1200,59 @@ fn init_logging() {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
+}
+
+async fn print_execute_cache_repair(
+    path: &str,
+    args: &[String],
+    policy: &SignaturePolicy,
+    output_format: &str,
+    output_file: Option<&str>,
+) -> Result<()> {
+    let resource_cache = read_flag(args, "--resource-cache")
+        .ok_or_else(|| anyhow::anyhow!("--execute-cache-repair requires --resource-cache <path>"))?;
+
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read announcement file: {path}"))?;
+    let announcement: ResourceAnnouncement =
+        serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
+
+    if matches!(policy, SignaturePolicy::Strict) && read_flag(args, "--trusted-keys").is_none() {
+        anyhow::bail!("--signature-policy strict requires --trusted-keys <path>");
+    }
+
+    let (_reconciliation, repair_plan) = client::repair::plan_cache_repair(
+        std::path::Path::new(&resource_cache),
+        &announcement,
+    )
+    .await?;
+
+    let report = client::repair::execute_cache_repair(
+        &announcement,
+        &repair_plan,
+        &client::repair::CacheRepairConfig {
+            dry_run: read_flag_exists(args, "--dry-run"),
+            allow_manifest_repair: read_flag_exists(args, "--allow-manifest-repair"),
+            allow_refetch_repair: read_flag_exists(args, "--allow-refetch-repair"),
+            cache_dir: Some(resource_cache),
+        },
+    )
+    .await?;
+
+    let rendered = match output_format {
+        "json" => report.to_json()?,
+        _ => report.to_text(),
+    };
+
+    if let Some(path) = output_file {
+        std::fs::write(path, &rendered)
+            .with_context(|| format!("failed to write repair output file: {path}"))?;
+        println!("Repair output written to: {path}");
+    } else {
+        println!("{}", rendered);
+    }
+
+    Ok(())
 }
 
 fn read_flag(args: &[String], name: &str) -> Option<String> {
