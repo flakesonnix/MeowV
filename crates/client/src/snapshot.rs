@@ -35,7 +35,7 @@ impl ManifestSnapshot {
 }
 
 /// Compute snapshot_hash: canonical hash with snapshot_hash field zeroed.
-fn compute_snapshot_hash(snap: &ManifestSnapshot) -> Result<String> {
+pub(crate) fn compute_snapshot_hash(snap: &ManifestSnapshot) -> Result<String> {
     let mut copy = snap.clone();
     copy.snapshot_hash = String::new();
     canonical_hash(&copy)
