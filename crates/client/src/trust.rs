@@ -12,8 +12,9 @@ use std::marker::PhantomData;
 use anyhow::Result;
 use protocol::{
     ResourceAnnouncement, TrustedKey, build_signature_verification_plan,
-    signature_engine::{SignaturePolicy, TrustedPublicKey, evaluate_signature_policy,
-                       execute_verification_plan},
+    signature_engine::{
+        SignaturePolicy, TrustedPublicKey, evaluate_signature_policy, execute_verification_plan,
+    },
 };
 
 // ── State markers ─────────────────────────────────────────────────────────────
@@ -54,9 +55,12 @@ impl Announcement<Unverified> {
     /// Entry point. Parse raw JSON into a structurally valid announcement.
     /// On success advances to `Parsed`. Fails on malformed JSON or schema errors.
     pub fn from_raw(raw: &str) -> Result<Announcement<Parsed>> {
-        let inner: ResourceAnnouncement =
-            serde_json::from_str(raw).map_err(|e| anyhow::anyhow!("failed to parse announcement: {e}"))?;
-        Ok(Announcement { inner, _state: PhantomData })
+        let inner: ResourceAnnouncement = serde_json::from_str(raw)
+            .map_err(|e| anyhow::anyhow!("failed to parse announcement: {e}"))?;
+        Ok(Announcement {
+            inner,
+            _state: PhantomData,
+        })
     }
 
     /// Wrap a programmatically constructed `ResourceAnnouncement`, advancing directly to
@@ -66,7 +70,10 @@ impl Announcement<Unverified> {
     /// Use for tests and in-process announcement construction.
     /// For untrusted external input, always use `from_raw`.
     pub fn from_constructed(ann: ResourceAnnouncement) -> Announcement<Parsed> {
-        Announcement { inner: ann, _state: PhantomData }
+        Announcement {
+            inner: ann,
+            _state: PhantomData,
+        }
     }
 }
 
@@ -87,7 +94,10 @@ impl Announcement<Parsed> {
             (SignaturePolicy::Strict, Some(k)) if k.is_empty() => Err(TrustRejected {
                 reason: "--signature-policy strict requires at least one trusted key".to_string(),
             }),
-            _ => Ok(Announcement { inner: self.inner, _state: PhantomData }),
+            _ => Ok(Announcement {
+                inner: self.inner,
+                _state: PhantomData,
+            }),
         }
     }
 
@@ -96,7 +106,10 @@ impl Announcement<Parsed> {
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn skip_policy_check(self) -> Announcement<PolicyChecked> {
-        Announcement { inner: self.inner, _state: PhantomData }
+        Announcement {
+            inner: self.inner,
+            _state: PhantomData,
+        }
     }
 }
 
@@ -109,7 +122,10 @@ impl Announcement<PolicyChecked> {
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn trust_relaxed_for_testing(self) -> Announcement<Trusted> {
-        Announcement { inner: self.inner, _state: PhantomData }
+        Announcement {
+            inner: self.inner,
+            _state: PhantomData,
+        }
     }
 
     /// Resolve to Trusted by running the full verification pipeline.
@@ -139,7 +155,10 @@ impl Announcement<PolicyChecked> {
                         "report-only signature verification complete"
                     );
                 }
-                Ok(Announcement { inner: self.inner, _state: PhantomData })
+                Ok(Announcement {
+                    inner: self.inner,
+                    _state: PhantomData,
+                })
             }
             SignaturePolicy::Strict => {
                 let keys = keys.ok_or_else(|| TrustRejected {
@@ -153,12 +172,15 @@ impl Announcement<PolicyChecked> {
                     })
                     .collect();
                 let reject_unsigned = true;
-                let plan = build_signature_verification_plan(&self.inner, &trusted, reject_unsigned);
+                let plan =
+                    build_signature_verification_plan(&self.inner, &trusted, reject_unsigned);
                 let report = execute_verification_plan(&self.inner, &plan, keys);
-                evaluate_signature_policy(&report, policy).map_err(|e| TrustRejected {
-                    reason: e.message,
-                })?;
-                Ok(Announcement { inner: self.inner, _state: PhantomData })
+                evaluate_signature_policy(&report, policy)
+                    .map_err(|e| TrustRejected { reason: e.message })?;
+                Ok(Announcement {
+                    inner: self.inner,
+                    _state: PhantomData,
+                })
             }
         }
     }
@@ -177,7 +199,6 @@ impl Announcement<Trusted> {
     pub fn into_announcement(self) -> ResourceAnnouncement {
         self.inner
     }
-
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -192,7 +213,9 @@ pub fn resolve_announcement_trust(
     keys: Option<&[TrustedPublicKey]>,
 ) -> Result<Announcement<Trusted>> {
     let parsed = Announcement::<Unverified>::from_raw(raw)?;
-    let policy_checked = parsed.check_policy(policy, keys).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let policy_checked = parsed
+        .check_policy(policy, keys)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let trusted = policy_checked
         .resolve_trust(policy, keys)
         .map_err(|e| anyhow::anyhow!("{e}"))?;

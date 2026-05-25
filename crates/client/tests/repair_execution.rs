@@ -1,8 +1,8 @@
 use client::fetch::{CacheManifestEntry, load_cache_manifest};
+use client::reconciliation::{CacheFileEntry, build_cache_reconciliation_plan};
 use client::repair::{
     CacheRepairConfig, CacheRepairOutcome, build_cache_repair_plan, execute_cache_repair,
 };
-use client::reconciliation::{CacheFileEntry, build_cache_reconciliation_plan};
 use client::trust::{Announcement, PolicyChecked, Trusted, Unverified};
 
 fn trust_relaxed_for_test(announcement: Announcement<PolicyChecked>) -> Announcement<Trusted> {
@@ -102,7 +102,11 @@ fn repair_dry_run_does_not_mutate_cache() {
         "main.lua",
         content.len() as u64,
         &expected_sha,
-        make_source(&source_file.to_string_lossy(), content.len() as u64, &expected_sha),
+        make_source(
+            &source_file.to_string_lossy(),
+            content.len() as u64,
+            &expected_sha,
+        ),
     );
 
     let reconciliation = build_cache_reconciliation_plan(
@@ -159,12 +163,20 @@ fn repair_manifest_entry_updates_manifest() {
         "main.lua",
         content.len() as u64,
         &expected_sha,
-        make_source(&source_file.to_string_lossy(), content.len() as u64, &expected_sha),
+        make_source(
+            &source_file.to_string_lossy(),
+            content.len() as u64,
+            &expected_sha,
+        ),
     );
 
     let reconciliation = build_cache_reconciliation_plan(
         &client::fetch::CacheManifest::empty(),
-        &[make_cache_entry("chat/main.lua", &expected_sha, content.len() as u64)],
+        &[make_cache_entry(
+            "chat/main.lua",
+            &expected_sha,
+            content.len() as u64,
+        )],
         &announcement,
         false,
     );
@@ -207,7 +219,11 @@ fn repair_missing_file_refetches_into_cache() {
         "main.lua",
         content.len() as u64,
         &expected_sha,
-        make_source(&source_file.to_string_lossy(), content.len() as u64, &expected_sha),
+        make_source(
+            &source_file.to_string_lossy(),
+            content.len() as u64,
+            &expected_sha,
+        ),
     );
 
     let reconciliation = build_cache_reconciliation_plan(
@@ -266,7 +282,11 @@ fn repair_hash_mismatch_replaces_file() {
         "main.lua",
         good_content.len() as u64,
         &good_sha,
-        make_source(&source_file.to_string_lossy(), good_content.len() as u64, &good_sha),
+        make_source(
+            &source_file.to_string_lossy(),
+            good_content.len() as u64,
+            &good_sha,
+        ),
     );
 
     let reconciliation = build_cache_reconciliation_plan(
@@ -279,7 +299,11 @@ fn repair_hash_mismatch_replaces_file() {
                 good_content.len() as u64,
             )],
         },
-        &[make_cache_entry("main.lua", &bad_sha, bad_content.len() as u64)],
+        &[make_cache_entry(
+            "main.lua",
+            &bad_sha,
+            bad_content.len() as u64,
+        )],
         &announcement,
         false,
     );
@@ -320,7 +344,11 @@ fn repair_both_flags_false_produces_blocked_outcome() {
         "main.lua",
         content.len() as u64,
         &expected_sha,
-        make_source(&source_file.to_string_lossy(), content.len() as u64, &expected_sha),
+        make_source(
+            &source_file.to_string_lossy(),
+            content.len() as u64,
+            &expected_sha,
+        ),
     );
 
     let reconciliation = build_cache_reconciliation_plan(

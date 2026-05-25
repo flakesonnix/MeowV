@@ -32,7 +32,9 @@ pub struct LeaseConfig {
 pub enum LeaseReclaimOutcome {
     Reclaimed,
     /// One or more reclamation conditions failed.
-    RequiresRevalidation { reason: String },
+    RequiresRevalidation {
+        reason: String,
+    },
 }
 
 impl LockLease {

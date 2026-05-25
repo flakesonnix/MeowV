@@ -8,6 +8,8 @@
 /// 4. Empty journal replay: snapshot unchanged, no write performed
 /// 5. Hash chain break: replay rejects tampered journal entries
 use client::fetch::CacheManifestEntry;
+use client::journal::JournalEntry;
+use client::journal::JournalReader;
 use client::journal::{
     EntryUpsertPayload, JournalWriter, LockScope, ManifestRebuildPayload, MutationScope,
     MutationType,
@@ -15,8 +17,6 @@ use client::journal::{
 use client::replay::replay_journal;
 use client::snapshot::{ManifestSnapshot, load_latest_snapshot, verify_snapshot, write_snapshot};
 use client::state::canonical_hash;
-use client::journal::JournalEntry;
-use client::journal::JournalReader;
 
 fn make_entry(resource: &str, path: &str, sha: &str) -> CacheManifestEntry {
     CacheManifestEntry {
@@ -30,11 +30,17 @@ fn make_entry(resource: &str, path: &str, sha: &str) -> CacheManifestEntry {
 }
 
 fn resource_scope(resource: &str) -> MutationScope {
-    MutationScope { resource_name: resource.to_string(), file_path: None }
+    MutationScope {
+        resource_name: resource.to_string(),
+        file_path: None,
+    }
 }
 
 fn resource_lock(resource: &str) -> LockScope {
-    LockScope { resource_name: resource.to_string(), file_path: None }
+    LockScope {
+        resource_name: resource.to_string(),
+        file_path: None,
+    }
 }
 
 /// Build a JournalEntry for an upsert mutation, computing pre/postcondition hashes
@@ -52,7 +58,10 @@ fn upsert_journal_entry(
     after.push(new_entry.clone());
     after.sort_by(|a, b| (&a.resource_name, &a.file_path).cmp(&(&b.resource_name, &b.file_path)));
     let post = canonical_hash(&after).unwrap();
-    let payload = serde_json::to_value(EntryUpsertPayload { entry: new_entry.clone() }).unwrap();
+    let payload = serde_json::to_value(EntryUpsertPayload {
+        entry: new_entry.clone(),
+    })
+    .unwrap();
     JournalEntry::new(
         sequence,
         MutationType::ManifestEntryRepair,
@@ -78,11 +87,17 @@ fn rebuild_journal_entry(
     let mut sorted = new_entries.clone();
     sorted.sort_by(|a, b| (&a.resource_name, &a.file_path).cmp(&(&b.resource_name, &b.file_path)));
     let post = canonical_hash(&sorted).unwrap();
-    let payload = serde_json::to_value(ManifestRebuildPayload { entries: new_entries }).unwrap();
+    let payload = serde_json::to_value(ManifestRebuildPayload {
+        entries: new_entries,
+    })
+    .unwrap();
     JournalEntry::new(
         sequence,
         MutationType::ManifestRebuild,
-        MutationScope { resource_name: "all".to_string(), file_path: None },
+        MutationScope {
+            resource_name: "all".to_string(),
+            file_path: None,
+        },
         pre,
         post,
         payload,
@@ -118,7 +133,9 @@ async fn replay_from_genesis_produces_correct_snapshot() {
     writer.append(&je2).await.unwrap();
 
     let journal = JournalReader::new(journal_path.clone());
-    let result = replay_journal(&genesis, &journal, &snapshot_dir).await.unwrap();
+    let result = replay_journal(&genesis, &journal, &snapshot_dir)
+        .await
+        .unwrap();
 
     verify_snapshot(&result).unwrap();
 
@@ -160,8 +177,12 @@ async fn replay_is_deterministic() {
     let journal = JournalReader::new(journal_path.clone());
 
     // Run replay twice from identical starting conditions.
-    let result_a = replay_journal(&genesis, &journal, &snapshot_dir_a).await.unwrap();
-    let result_b = replay_journal(&genesis, &journal, &snapshot_dir_b).await.unwrap();
+    let result_a = replay_journal(&genesis, &journal, &snapshot_dir_a)
+        .await
+        .unwrap();
+    let result_b = replay_journal(&genesis, &journal, &snapshot_dir_b)
+        .await
+        .unwrap();
 
     // Determinism: both must produce identical content and hash.
     assert_eq!(result_a.entries, result_b.entries);
@@ -192,7 +213,9 @@ async fn chained_replay_preserves_prior_state() {
     }
 
     let journal = JournalReader::new(journal_path.clone());
-    let snapshot_1 = replay_journal(&genesis, &journal, &snapshot_dir).await.unwrap();
+    let snapshot_1 = replay_journal(&genesis, &journal, &snapshot_dir)
+        .await
+        .unwrap();
     verify_snapshot(&snapshot_1).unwrap();
 
     // Phase 2: replace chat/main.lua with new sha, replay from snapshot_1 to snapshot_2.
@@ -204,7 +227,9 @@ async fn chained_replay_preserves_prior_state() {
     }
 
     let journal = JournalReader::new(journal_path.clone());
-    let snapshot_2 = replay_journal(&snapshot_1, &journal, &snapshot_dir).await.unwrap();
+    let snapshot_2 = replay_journal(&snapshot_1, &journal, &snapshot_dir)
+        .await
+        .unwrap();
     verify_snapshot(&snapshot_2).unwrap();
 
     // snapshot_2 must have the updated entry, not the original.
@@ -222,14 +247,24 @@ async fn chained_replay_preserves_prior_state() {
     }
 
     let journal = JournalReader::new(journal_path.clone());
-    let snapshot_3 = replay_journal(&snapshot_2, &journal, &snapshot_dir).await.unwrap();
+    let snapshot_3 = replay_journal(&snapshot_2, &journal, &snapshot_dir)
+        .await
+        .unwrap();
     verify_snapshot(&snapshot_3).unwrap();
 
     assert_eq!(snapshot_3.entries.len(), 2);
     // chat/main.lua must still be sha-v2 (not sha-v1, not missing).
-    let chat = snapshot_3.entries.iter().find(|e| e.resource_name == "chat").unwrap();
+    let chat = snapshot_3
+        .entries
+        .iter()
+        .find(|e| e.resource_name == "chat")
+        .unwrap();
     assert_eq!(chat.sha256, "sha-v2");
-    let modd = snapshot_3.entries.iter().find(|e| e.resource_name == "mod").unwrap();
+    let modd = snapshot_3
+        .entries
+        .iter()
+        .find(|e| e.resource_name == "mod")
+        .unwrap();
     assert_eq!(modd.sha256, "sha-cfg");
 }
 
@@ -247,7 +282,9 @@ async fn replay_with_empty_journal_returns_snapshot_unchanged() {
     // Empty journal file.
     std::fs::write(&journal_path, b"").unwrap();
     let journal = JournalReader::new(journal_path.clone());
-    let result = replay_journal(&genesis, &journal, &snapshot_dir).await.unwrap();
+    let result = replay_journal(&genesis, &journal, &snapshot_dir)
+        .await
+        .unwrap();
 
     // Empty journal must return same snapshot — no new write performed.
     assert_eq!(result.snapshot_id, genesis.snapshot_id);
@@ -272,14 +309,10 @@ async fn replay_rejects_hash_chain_break() {
     let e2 = make_entry("chat", "ui.lua", "sha-b");
     // Build je2 with correct prev_entry_hash first (so JournalEntry::new succeeds),
     // then tamper prev_entry_hash before writing to disk.
-    let mut je2 = upsert_journal_entry(
-        2,
-        je1.entry_hash.clone(),
-        &entries_after_1,
-        e2,
-    );
+    let mut je2 = upsert_journal_entry(2, je1.entry_hash.clone(), &entries_after_1, e2);
     // Tamper with the hash chain: prev_entry_hash does not match je1.entry_hash.
-    je2.prev_entry_hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    je2.prev_entry_hash =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
 
     // Write both entries manually (je1 untouched, je2 with tampered prev_entry_hash).
     let mut lines = Vec::new();
@@ -288,7 +321,9 @@ async fn replay_rejects_hash_chain_break() {
     std::fs::write(&journal_path, lines.join("\n") + "\n").unwrap();
 
     let journal = JournalReader::new(journal_path.clone());
-    let err = replay_journal(&genesis, &journal, &snapshot_dir).await.unwrap_err();
+    let err = replay_journal(&genesis, &journal, &snapshot_dir)
+        .await
+        .unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("hash chain break") || msg.contains("HashChainBreak"),
@@ -312,7 +347,9 @@ async fn replay_snapshot_written_to_disk_is_loadable() {
     writer.append(&je1).await.unwrap();
 
     let journal = JournalReader::new(journal_path);
-    let written = replay_journal(&genesis, &journal, &snapshot_dir).await.unwrap();
+    let written = replay_journal(&genesis, &journal, &snapshot_dir)
+        .await
+        .unwrap();
 
     // Load the snapshot back from disk via the head pointer.
     let loaded = load_latest_snapshot(&snapshot_dir).await.unwrap();

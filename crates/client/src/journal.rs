@@ -239,11 +239,13 @@ impl JournalReader {
         for entry in &entries {
             entry.verify_prev_link(&prev)?;
             entry.verify_hash(&prev)?;
-            prev = Hash::from_prefixed_hex(&entry.entry_hash)
-                .ok_or_else(|| anyhow::anyhow!(
+            prev = Hash::from_prefixed_hex(&entry.entry_hash).ok_or_else(|| {
+                anyhow::anyhow!(
                     "entry {} has invalid entry_hash format: {}",
-                    entry.entry_id, entry.entry_hash
-                ))?;
+                    entry.entry_id,
+                    entry.entry_hash
+                )
+            })?;
         }
         Ok(entries.len() as u64)
     }

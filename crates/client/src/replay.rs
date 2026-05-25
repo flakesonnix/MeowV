@@ -30,14 +30,37 @@ pub enum ReplayError {
 impl std::fmt::Display for ReplayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PreconditionMismatch { entry_id, expected, actual } =>
-                write!(f, "precondition mismatch: entry={entry_id} expected={expected} actual={actual}"),
-            Self::PostconditionMismatch { entry_id, expected, actual } =>
-                write!(f, "postcondition mismatch: entry={entry_id} expected={expected} actual={actual}"),
-            Self::HashChainBreak { at_sequence, expected_prev, actual_prev } =>
-                write!(f, "hash chain break at sequence={at_sequence}: expected_prev={expected_prev} actual_prev={actual_prev}"),
-            Self::SnapshotVerificationFailed { snapshot_id, reason } =>
-                write!(f, "snapshot verification failed: id={snapshot_id} reason={reason}"),
+            Self::PreconditionMismatch {
+                entry_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "precondition mismatch: entry={entry_id} expected={expected} actual={actual}"
+            ),
+            Self::PostconditionMismatch {
+                entry_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "postcondition mismatch: entry={entry_id} expected={expected} actual={actual}"
+            ),
+            Self::HashChainBreak {
+                at_sequence,
+                expected_prev,
+                actual_prev,
+            } => write!(
+                f,
+                "hash chain break at sequence={at_sequence}: expected_prev={expected_prev} actual_prev={actual_prev}"
+            ),
+            Self::SnapshotVerificationFailed {
+                snapshot_id,
+                reason,
+            } => write!(
+                f,
+                "snapshot verification failed: id={snapshot_id} reason={reason}"
+            ),
         }
     }
 }
@@ -99,10 +122,7 @@ pub async fn replay_journal(
     Ok(new_snapshot)
 }
 
-fn verify_hash_chain(
-    snapshot: &ManifestSnapshot,
-    entries: &[JournalEntry],
-) -> Result<()> {
+fn verify_hash_chain(snapshot: &ManifestSnapshot, entries: &[JournalEntry]) -> Result<()> {
     let mut prev_hash: &str = &snapshot.journal_head_hash;
     for entry in entries {
         if entry.prev_entry_hash != *prev_hash {
