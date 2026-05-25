@@ -78,7 +78,8 @@ pub async fn replay_journal(
 
     // Apply entries to in-memory state only.
     // FORBIDDEN: do not read disk, do not persist partial state.
-    let mut view = StateView::from_snapshot(snapshot);
+    let mut view = StateView::from_snapshot(snapshot)
+        .context("failed to initialize state view from snapshot")?;
     for entry in &entries {
         view.apply_entry(entry)
             .map_err(|e| anyhow::anyhow!("replay failed at entry {}: {}", entry.entry_id, e))?;
@@ -90,7 +91,9 @@ pub async fn replay_journal(
         .unwrap_or_else(|| snapshot.journal_head_hash.clone());
 
     // Only persist after full successful replay.
-    let new_snapshot = view.into_snapshot(last_entry_hash, snapshot);
+    let new_snapshot = view
+        .into_snapshot(last_entry_hash, snapshot)
+        .context("failed to compute snapshot hash after replay")?;
     write_snapshot(snapshot_dir, &new_snapshot).await?;
 
     Ok(new_snapshot)
@@ -100,16 +103,16 @@ fn verify_hash_chain(
     snapshot: &ManifestSnapshot,
     entries: &[JournalEntry],
 ) -> Result<()> {
-    let mut expected_prev = snapshot.journal_head_hash.clone();
+    let mut prev_hash: &str = &snapshot.journal_head_hash;
     for entry in entries {
-        if entry.prev_entry_hash != expected_prev {
+        if entry.prev_entry_hash != *prev_hash {
             return Err(anyhow::anyhow!(ReplayError::HashChainBreak {
                 at_sequence: entry.sequence,
-                expected_prev: expected_prev.clone(),
+                expected_prev: prev_hash.to_owned(),
                 actual_prev: entry.prev_entry_hash.clone(),
             }));
         }
-        expected_prev = entry.entry_hash.clone();
+        prev_hash = &entry.entry_hash;
     }
     Ok(())
 }

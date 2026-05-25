@@ -37,7 +37,7 @@ pub enum LeaseReclaimOutcome {
 
 impl LockLease {
     pub fn is_expired(&self) -> bool {
-        now_unix_ms() > self.expires_at_unix_ms
+        now_unix_ms() >= self.expires_at_unix_ms
     }
 }
 
