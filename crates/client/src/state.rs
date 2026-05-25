@@ -20,13 +20,10 @@ pub struct StateView {
 }
 
 impl StateView {
-    pub fn from_snapshot(snapshot: &ManifestSnapshot) -> Self {
+    pub fn from_snapshot(snapshot: &ManifestSnapshot) -> Result<Self> {
         let entries = snapshot.entries.clone();
-        let hash = canonical_hash(&entries).unwrap_or_default();
-        Self {
-            entries,
-            current_hash: hash,
-        }
+        let hash = canonical_hash(&entries)?;
+        Ok(Self { entries, current_hash: hash })
     }
 
     pub fn apply_entry(&mut self, entry: &JournalEntry) -> Result<(), ReplayViewError> {
@@ -96,7 +93,7 @@ impl StateView {
         self,
         journal_head_hash: String,
         parent: &ManifestSnapshot,
-    ) -> ManifestSnapshot {
+    ) -> Result<ManifestSnapshot> {
         let mut snap = ManifestSnapshot {
             schema_version: 1,
             snapshot_id: new_id(),
@@ -106,8 +103,8 @@ impl StateView {
             snapshot_hash: String::new(),
             entries: self.entries,
         };
-        snap.snapshot_hash = compute_snapshot_hash(&snap).unwrap_or_default();
-        snap
+        snap.snapshot_hash = compute_snapshot_hash(&snap)?;
+        Ok(snap)
     }
 }
 
@@ -327,11 +324,39 @@ mod tests {
     }
 
     #[test]
+    fn apply_entry_chained_mutations_track_hash() {
+        let mut view = make_genesis_view(vec![]);
+
+        // First mutation: insert chat/main.lua
+        let pre1 = canonical_hash(&view.entries).unwrap();
+        let e1 = make_entry("chat", "main.lua", "sha-v1");
+        let after1 = vec![e1.clone()];
+        let post1 = canonical_hash(&after1).unwrap();
+        let p1 = serde_json::to_value(EntryUpsertPayload { entry: e1 }).unwrap();
+        view.apply_entry(&make_journal_entry(MutationType::ManifestEntryRepair, &pre1, &post1, p1)).unwrap();
+
+        assert_eq!(view.current_hash, post1);
+
+        // Second mutation: replace chat/main.lua with new sha
+        let pre2 = view.current_hash.clone(); // must equal post1
+        let e2 = make_entry("chat", "main.lua", "sha-v2");
+        let after2 = vec![e2.clone()];
+        let post2 = canonical_hash(&after2).unwrap();
+        let p2 = serde_json::to_value(EntryUpsertPayload { entry: e2 }).unwrap();
+        view.apply_entry(&make_journal_entry(MutationType::FileRefetch, &pre2, &post2, p2)).unwrap();
+
+        assert_eq!(view.entries.len(), 1);
+        assert_eq!(view.entries[0].sha256, "sha-v2");
+        assert_eq!(view.current_hash, post2);
+        assert_ne!(view.current_hash, post1);
+    }
+
+    #[test]
     fn into_snapshot_produces_verifiable_snapshot() {
         let entries = vec![make_entry("chat", "main.lua", "sha")];
         let view = make_genesis_view(entries.clone());
         let parent = ManifestSnapshot::genesis(vec![]).unwrap();
-        let snap = view.into_snapshot("genesis".to_string(), &parent);
+        let snap = view.into_snapshot("genesis".to_string(), &parent).unwrap();
         crate::snapshot::verify_snapshot(&snap).unwrap();
     }
 }

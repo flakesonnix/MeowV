@@ -46,7 +46,7 @@ jobs:
       - name: Test client with test-support feature
         run: cargo test -p client --features test-support
 
-  workspace-tests:
+  server:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,5 +58,20 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Run server tests
+        run: cargo test -p server
+
+  libs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run library tests
+        run: cargo test -p game_edition -p resource_manifest -p protocol -p server_browser
