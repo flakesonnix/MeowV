@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::fetch::CacheManifestEntry;
-use crate::state::{canonical_hash, new_id, now_unix_ms};
+use crate::hash::{Hash, hash_chain_link};
+use crate::state::{new_id, now_unix_ms};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -81,10 +82,48 @@ pub struct ManifestRebuildPayload {
 }
 
 impl JournalEntry {
-    pub fn compute_hash(entry: &Self) -> Result<String> {
+    /// Compute `entry_hash` using the hash chain primitive.
+    ///
+    /// Encodes the entry as canonical JSON with `entry_hash` zeroed, then applies
+    /// `hash_chain_link(prev_hash, canonical_json_bytes)`.
+    pub fn compute_hash(entry: &Self, prev_hash: &Hash) -> Result<String> {
         let mut copy = entry.clone();
         copy.entry_hash = String::new();
-        canonical_hash(&copy)
+        let payload = serde_json::to_vec(&copy)?;
+        Ok(hash_chain_link(prev_hash, &payload).prefixed_hex())
+    }
+
+    /// Verify that this entry's `entry_hash` matches `hash_chain_link(prev_hash, payload)`.
+    pub fn verify_hash(&self, prev_hash: &Hash) -> Result<()> {
+        let expected = Self::compute_hash(self, prev_hash)?;
+        if self.entry_hash != expected {
+            anyhow::bail!(
+                "entry {} hash mismatch: expected={expected} actual={}",
+                self.entry_id,
+                self.entry_hash
+            );
+        }
+        Ok(())
+    }
+
+    /// Verify that this entry's `prev_entry_hash` chains correctly from the previous hash.
+    ///
+    /// Accepts `"genesis"` as a canonical alias for `Hash::GENESIS` — journal entries
+    /// created from a genesis snapshot store `"genesis"` as the human-readable sentinel.
+    pub fn verify_prev_link(&self, prev_hash: &Hash) -> Result<()> {
+        let genesis_alias = *prev_hash == Hash::GENESIS && self.prev_entry_hash == "genesis";
+        if genesis_alias {
+            return Ok(());
+        }
+        let expected = prev_hash.prefixed_hex();
+        if self.prev_entry_hash != expected {
+            anyhow::bail!(
+                "entry {} prev_entry_hash mismatch: expected={expected} actual={}",
+                self.entry_id,
+                self.prev_entry_hash
+            );
+        }
+        Ok(())
     }
 
     pub fn compute_idempotency_key(
@@ -94,12 +133,17 @@ impl JournalEntry {
     ) -> Result<String> {
         use sha2::Digest;
         let scope_json = serde_json::to_string(scope)?;
-        let combined =
-            format!("{}{}{}", mutation_type.label(), scope_json, postcondition_hash);
+        let combined = format!(
+            "{}{}{}",
+            mutation_type.label(),
+            scope_json,
+            postcondition_hash
+        );
         let digest = sha2::Sha256::digest(combined.as_bytes());
         Ok(format!("sha256:{:x}", digest))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sequence: u64,
         mutation_type: MutationType,
@@ -112,11 +156,8 @@ impl JournalEntry {
         checkpoint_state: Option<serde_json::Value>,
         origin_context: Option<String>,
     ) -> Result<Self> {
-        let idempotency_key = Self::compute_idempotency_key(
-            &mutation_type,
-            &target_scope,
-            &postcondition_hash,
-        )?;
+        let idempotency_key =
+            Self::compute_idempotency_key(&mutation_type, &target_scope, &postcondition_hash)?;
         let mut entry = Self {
             schema_version: 1,
             entry_id: new_id(),
@@ -136,7 +177,14 @@ impl JournalEntry {
             retry_count: 0,
             origin_context,
         };
-        entry.entry_hash = Self::compute_hash(&entry)?;
+        let prev_hash = if entry.prev_entry_hash == "genesis" {
+            Hash::GENESIS
+        } else {
+            Hash::from_prefixed_hex(&entry.prev_entry_hash).ok_or_else(|| {
+                anyhow::anyhow!("invalid prev_entry_hash: {}", entry.prev_entry_hash)
+            })?
+        };
+        entry.entry_hash = Self::compute_hash(&entry, &prev_hash)?;
         Ok(entry)
     }
 }
@@ -177,6 +225,30 @@ pub struct JournalReader {
 impl JournalReader {
     pub fn new(path: std::path::PathBuf) -> Self {
         Self { path }
+    }
+
+    /// Verify the full hash chain from genesis to the last entry.
+    ///
+    /// Checks:
+    /// 1. Each entry's `prev_entry_hash` matches the previous entry's `entry_hash`.
+    /// 2. Each entry's `entry_hash` matches `hash_chain_link(prev_hash, payload)`.
+    ///
+    /// Returns the number of verified entries on success.
+    pub async fn verify(&self) -> Result<u64> {
+        let entries = self.read_after(0).await?;
+        let mut prev = Hash::GENESIS;
+        for entry in &entries {
+            entry.verify_prev_link(&prev)?;
+            entry.verify_hash(&prev)?;
+            prev = Hash::from_prefixed_hex(&entry.entry_hash).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "entry {} has invalid entry_hash format: {}",
+                    entry.entry_id,
+                    entry.entry_hash
+                )
+            })?;
+        }
+        Ok(entries.len() as u64)
     }
 
     /// Read all entries with sequence > after_sequence, in order.

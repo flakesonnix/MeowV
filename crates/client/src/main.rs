@@ -1209,8 +1209,9 @@ async fn print_execute_cache_repair(
     output_format: &str,
     output_file: Option<&str>,
 ) -> Result<()> {
-    let resource_cache = read_flag(args, "--resource-cache")
-        .ok_or_else(|| anyhow::anyhow!("--execute-cache-repair requires --resource-cache <path>"))?;
+    let resource_cache = read_flag(args, "--resource-cache").ok_or_else(|| {
+        anyhow::anyhow!("--execute-cache-repair requires --resource-cache <path>")
+    })?;
 
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read announcement file: {path}"))?;

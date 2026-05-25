@@ -1,5 +1,6 @@
 // Library facade for the client crate so integration tests can access helpers.
 pub mod fetch;
+pub mod hash;
 pub mod heartbeat;
 pub mod journal;
 pub mod lock;
@@ -62,10 +63,12 @@ fn build_preflight_plan(
         if let Some(cache_dir) = resource_cache.as_deref() {
             let resource_dir = workspace_root.join(format!("examples/resources/{}", resource.name));
             let report = verify_cache_for_resource(&resource_dir, cache_dir)?;
-            avail_entries.extend(report.entries.into_iter().map(|entry| ResourceAvailabilityEntry {
-                resource_name: resource.name.clone(),
-                file_path: entry.relative_path.to_string_lossy().into_owned(),
-                status: map_cache_status(entry.status),
+            avail_entries.extend(report.entries.into_iter().map(|entry| {
+                ResourceAvailabilityEntry {
+                    resource_name: resource.name.clone(),
+                    file_path: entry.relative_path.to_string_lossy().into_owned(),
+                    status: map_cache_status(entry.status),
+                }
             }));
         } else {
             avail_entries.extend(resource.files.iter().map(|file| ResourceAvailabilityEntry {
@@ -112,7 +115,9 @@ pub fn get_resource_download_preflight_plan_json(
     args: &[String],
     policy: &protocol::signature_engine::SignaturePolicy,
 ) -> Result<String> {
-    Ok(serde_json::to_string_pretty(&build_preflight_plan(path, args, policy)?)?)
+    Ok(serde_json::to_string_pretty(&build_preflight_plan(
+        path, args, policy,
+    )?)?)
 }
 
 fn map_cache_status(status: CacheFileStatus) -> ResourceAvailabilityStatus {

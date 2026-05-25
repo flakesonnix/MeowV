@@ -319,8 +319,9 @@ pub fn build_cache_repair_plan(
                 resource_name: entry.resource_name.clone(),
                 file_path: entry.file_path.clone(),
                 action: CacheRepairAction::RebuildManifest,
-                reason: "manifest is corrupted; rebuild authoritative entry from cache+announcement"
-                    .to_string(),
+                reason:
+                    "manifest is corrupted; rebuild authoritative entry from cache+announcement"
+                        .to_string(),
                 cache_sha256: None,
             }),
             _ => None,
@@ -366,12 +367,8 @@ pub async fn plan_cache_repair(
         false
     };
     let cache_files = scan_cache_directory(cache_dir).await.unwrap_or_default();
-    let reconciliation = build_cache_reconciliation_plan(
-        &manifest,
-        &cache_files,
-        announcement,
-        manifest_corrupted,
-    );
+    let reconciliation =
+        build_cache_reconciliation_plan(&manifest, &cache_files, announcement, manifest_corrupted);
     let repair = build_cache_repair_plan(&reconciliation, announcement);
     Ok((reconciliation, repair))
 }
@@ -436,7 +433,8 @@ pub async fn execute_cache_repair(
                         }
                     }
                 }
-                CacheRepairAction::RefetchMissingFile | CacheRepairAction::ReplaceMismatchedFile => {
+                CacheRepairAction::RefetchMissingFile
+                | CacheRepairAction::ReplaceMismatchedFile => {
                     if !config.allow_refetch_repair {
                         (
                             CacheRepairOutcome::Blocked,
@@ -444,7 +442,8 @@ pub async fn execute_cache_repair(
                             Some(CacheRepairFailureReason::RepairNotPermitted),
                         )
                     } else {
-                        match execute_refetch_repair(cache_dir.as_path(), announcement, entry).await {
+                        match execute_refetch_repair(cache_dir.as_path(), announcement, entry).await
+                        {
                             Ok(fetch_report) => {
                                 let repaired = fetch_report.entries.iter().any(|fetch_entry| {
                                     fetch_entry.resource_name == entry.resource_name
@@ -662,7 +661,10 @@ mod tests {
 
     #[test]
     fn test_empty_repair_plan() {
-        let repair = build_cache_repair_plan(&CacheReconciliationPlan::empty(), &make_announcement(vec![]));
+        let repair = build_cache_repair_plan(
+            &CacheReconciliationPlan::empty(),
+            &make_announcement(vec![]),
+        );
         assert!(repair.is_empty());
         assert_eq!(repair.entry_count(), 0);
     }
@@ -679,7 +681,10 @@ mod tests {
             build_cache_reconciliation_plan(&CacheManifest::empty(), &cache, &ann, false);
         let repair = build_cache_repair_plan(&reconciliation, &ann);
         assert_eq!(repair.entry_count(), 1);
-        assert_eq!(repair.entries[0].action, CacheRepairAction::RepairManifestEntry);
+        assert_eq!(
+            repair.entries[0].action,
+            CacheRepairAction::RepairManifestEntry
+        );
     }
 
     #[test]
@@ -693,7 +698,10 @@ mod tests {
         let reconciliation = build_cache_reconciliation_plan(&manifest, &[], &ann, false);
         let repair = build_cache_repair_plan(&reconciliation, &ann);
         assert_eq!(repair.entry_count(), 1);
-        assert_eq!(repair.entries[0].action, CacheRepairAction::RefetchMissingFile);
+        assert_eq!(
+            repair.entries[0].action,
+            CacheRepairAction::RefetchMissingFile
+        );
     }
 
     #[test]
@@ -714,7 +722,10 @@ mod tests {
         let reconciliation = build_cache_reconciliation_plan(&manifest, &cache, &ann, false);
         let repair = build_cache_repair_plan(&reconciliation, &ann);
         assert_eq!(repair.entry_count(), 1);
-        assert_eq!(repair.entries[0].action, CacheRepairAction::ReplaceMismatchedFile);
+        assert_eq!(
+            repair.entries[0].action,
+            CacheRepairAction::ReplaceMismatchedFile
+        );
     }
 
     #[test]
@@ -751,12 +762,8 @@ mod tests {
         let sha = "g".repeat(64);
         let manifest = make_manifest(vec![make_manifest_entry("chat", "main.lua", &sha, 100)]);
         let cache = vec![make_cache_entry("chat/main.lua", &sha, 100)];
-        let reconciliation = build_cache_reconciliation_plan(
-            &manifest,
-            &cache,
-            &make_announcement(vec![]),
-            false,
-        );
+        let reconciliation =
+            build_cache_reconciliation_plan(&manifest, &cache, &make_announcement(vec![]), false);
         let repair = build_cache_repair_plan(&reconciliation, &make_announcement(vec![]));
         assert!(repair.is_empty());
     }

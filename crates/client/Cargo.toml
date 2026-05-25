@@ -34,3 +34,6 @@ tempfile = "3"
 [[test]]
 name = "repair_execution"
 required-features = ["test-support"]
+
+[[test]]
+name = "replay_determinism"

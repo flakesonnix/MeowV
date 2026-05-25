@@ -45,7 +45,12 @@ pub async fn load_latest_snapshot(snapshot_dir: &std::path::Path) -> Result<Mani
     let pointer_path = snapshot_dir.join("snapshot_head.json");
     let raw = tokio::fs::read_to_string(&pointer_path)
         .await
-        .with_context(|| format!("failed to read snapshot pointer: {}", pointer_path.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to read snapshot pointer: {}",
+                pointer_path.display()
+            )
+        })?;
     let snapshot: ManifestSnapshot =
         serde_json::from_str(&raw).context("failed to parse manifest snapshot")?;
     verify_snapshot(&snapshot)?;

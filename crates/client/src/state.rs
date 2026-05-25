@@ -23,18 +23,20 @@ impl StateView {
     pub fn from_snapshot(snapshot: &ManifestSnapshot) -> Result<Self> {
         let entries = snapshot.entries.clone();
         let hash = canonical_hash(&entries)?;
-        Ok(Self { entries, current_hash: hash })
+        Ok(Self {
+            entries,
+            current_hash: hash,
+        })
     }
 
     pub fn apply_entry(&mut self, entry: &JournalEntry) -> Result<(), ReplayViewError> {
         // Precondition: current entries must hash to what the journal entry expects.
-        let actual_pre = canonical_hash(&self.entries).map_err(|_| {
-            ReplayViewError::PreconditionMismatch {
+        let actual_pre =
+            canonical_hash(&self.entries).map_err(|_| ReplayViewError::PreconditionMismatch {
                 entry_id: entry.entry_id.clone(),
                 expected: entry.precondition_hash.clone(),
                 actual: "<hash error>".to_string(),
-            }
-        })?;
+            })?;
         if actual_pre != entry.precondition_hash {
             return Err(ReplayViewError::PreconditionMismatch {
                 entry_id: entry.entry_id.clone(),
@@ -70,13 +72,12 @@ impl StateView {
         }
 
         // Postcondition: entries after mutation must hash to what the journal entry asserts.
-        let actual_post = canonical_hash(&self.entries).map_err(|_| {
-            ReplayViewError::PostconditionMismatch {
+        let actual_post =
+            canonical_hash(&self.entries).map_err(|_| ReplayViewError::PostconditionMismatch {
                 entry_id: entry.entry_id.clone(),
                 expected: entry.postcondition_hash.clone(),
                 actual: "<hash error>".to_string(),
-            }
-        })?;
+            })?;
         if actual_post != entry.postcondition_hash {
             return Err(ReplayViewError::PostconditionMismatch {
                 entry_id: entry.entry_id.clone(),
@@ -126,12 +127,23 @@ pub enum ReplayViewError {
 impl std::fmt::Display for ReplayViewError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PreconditionMismatch { entry_id, expected, actual } =>
-                write!(f, "precondition mismatch: entry={entry_id} expected={expected} actual={actual}"),
-            Self::PostconditionMismatch { entry_id, expected, actual } =>
-                write!(f, "postcondition mismatch: entry={entry_id} expected={expected} actual={actual}"),
-            Self::UnsupportedMutationType(t) =>
-                write!(f, "unsupported mutation type: {t}"),
+            Self::PreconditionMismatch {
+                entry_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "precondition mismatch: entry={entry_id} expected={expected} actual={actual}"
+            ),
+            Self::PostconditionMismatch {
+                entry_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "postcondition mismatch: entry={entry_id} expected={expected} actual={actual}"
+            ),
+            Self::UnsupportedMutationType(t) => write!(f, "unsupported mutation type: {t}"),
         }
     }
 }
@@ -140,7 +152,7 @@ impl std::error::Error for ReplayViewError {}
 
 /// Canonical JSON hash — single implementation used everywhere.
 /// Serializes to JSON then SHA-256 hashes; returns `"sha256:<hex>"`.
-pub fn canonical_hash(value: &impl Serialize) -> Result<String> {
+pub fn canonical_hash<T: Serialize + ?Sized>(value: &T) -> Result<String> {
     use sha2::Digest;
     let json = serde_json::to_string(value)?;
     let digest = sha2::Sha256::digest(json.as_bytes());
@@ -153,9 +165,7 @@ fn upsert_entry(entries: &mut Vec<CacheManifestEntry>, entry: CacheManifestEntry
     let key = (entry.resource_name.as_str(), entry.file_path.as_str());
     entries.retain(|e| (e.resource_name.as_str(), e.file_path.as_str()) != key);
     entries.push(entry);
-    entries.sort_by(|a, b| {
-        (&a.resource_name, &a.file_path).cmp(&(&b.resource_name, &b.file_path))
-    });
+    entries.sort_by(|a, b| (&a.resource_name, &a.file_path).cmp(&(&b.resource_name, &b.file_path)));
 }
 
 pub(crate) fn new_id() -> String {
@@ -192,7 +202,10 @@ mod tests {
 
     fn make_genesis_view(entries: Vec<CacheManifestEntry>) -> StateView {
         let hash = canonical_hash(&entries).unwrap();
-        StateView { entries, current_hash: hash }
+        StateView {
+            entries,
+            current_hash: hash,
+        }
     }
 
     fn make_journal_entry(
@@ -234,9 +247,14 @@ mod tests {
         let pre = canonical_hash(&view.entries).unwrap();
         let new_entry = make_entry("chat", "main.lua", "aaaa");
         let mut after = vec![new_entry.clone()];
-        after.sort_by(|a, b| (&a.resource_name, &a.file_path).cmp(&(&b.resource_name, &b.file_path)));
+        after.sort_by(|a, b| {
+            (&a.resource_name, &a.file_path).cmp(&(&b.resource_name, &b.file_path))
+        });
         let post = canonical_hash(&after).unwrap();
-        let payload = serde_json::to_value(EntryUpsertPayload { entry: new_entry.clone() }).unwrap();
+        let payload = serde_json::to_value(EntryUpsertPayload {
+            entry: new_entry.clone(),
+        })
+        .unwrap();
         let je = make_journal_entry(MutationType::ManifestEntryRepair, &pre, &post, payload);
 
         view.apply_entry(&je).unwrap();
@@ -273,9 +291,14 @@ mod tests {
             make_entry("chat", "main.lua", "sha-new"),
         ];
         let mut sorted = new_entries.clone();
-        sorted.sort_by(|a, b| (&a.resource_name, &a.file_path).cmp(&(&b.resource_name, &b.file_path)));
+        sorted.sort_by(|a, b| {
+            (&a.resource_name, &a.file_path).cmp(&(&b.resource_name, &b.file_path))
+        });
         let post = canonical_hash(&sorted).unwrap();
-        let payload = serde_json::to_value(ManifestRebuildPayload { entries: new_entries }).unwrap();
+        let payload = serde_json::to_value(ManifestRebuildPayload {
+            entries: new_entries,
+        })
+        .unwrap();
         let je = make_journal_entry(MutationType::ManifestRebuild, &pre, &post, payload);
 
         view.apply_entry(&je).unwrap();
@@ -333,7 +356,13 @@ mod tests {
         let after1 = vec![e1.clone()];
         let post1 = canonical_hash(&after1).unwrap();
         let p1 = serde_json::to_value(EntryUpsertPayload { entry: e1 }).unwrap();
-        view.apply_entry(&make_journal_entry(MutationType::ManifestEntryRepair, &pre1, &post1, p1)).unwrap();
+        view.apply_entry(&make_journal_entry(
+            MutationType::ManifestEntryRepair,
+            &pre1,
+            &post1,
+            p1,
+        ))
+        .unwrap();
 
         assert_eq!(view.current_hash, post1);
 
@@ -343,7 +372,13 @@ mod tests {
         let after2 = vec![e2.clone()];
         let post2 = canonical_hash(&after2).unwrap();
         let p2 = serde_json::to_value(EntryUpsertPayload { entry: e2 }).unwrap();
-        view.apply_entry(&make_journal_entry(MutationType::FileRefetch, &pre2, &post2, p2)).unwrap();
+        view.apply_entry(&make_journal_entry(
+            MutationType::FileRefetch,
+            &pre2,
+            &post2,
+            p2,
+        ))
+        .unwrap();
 
         assert_eq!(view.entries.len(), 1);
         assert_eq!(view.entries[0].sha256, "sha-v2");
