@@ -82,6 +82,10 @@ These must hold at all times across all code paths:
    all-or-nothing. Intermediate in-memory state during replay is never written to disk.
 6. **If uncertainty exists, prefer rollback over assumption.** When precondition or
    postcondition hashes do not match, abort and rollback.
+7. **Replay depends only on snapshot + journal.** Replay must never read current
+   disk state as input. The only permitted reads during replay are: loading the
+   snapshot file, and reading journal entries. No fallback disk reads, no
+   "helpful" partial state reuse.
 
 ---
 
@@ -256,6 +260,18 @@ canonical manifest pointer is a separate file referencing the latest snapshot_id
 This prevents silent corruption — a snapshot file whose content does not match its
 filename is immediately detectable.
 
+### Snapshot Commit Rule
+
+A snapshot is valid only if:
+
+- it was produced from a contiguous journal prefix, and
+- that prefix ends exactly at the entry whose `entry_hash` matches
+  `snapshot.journal_head_hash`
+
+A snapshot that does not correspond to a real contiguous journal prefix is invalid
+and must not be used as a replay anchor. This prevents the divergence class where
+a snapshot exists but no journal sequence leads to it deterministically.
+
 ---
 
 ## 6. Lock Protocol
@@ -266,6 +282,7 @@ filename is immediately detectable.
 {
   "schema_version": 1,
   "lock_id": "01926f3c-7c2b-7000-8abc-0123456789ab",
+  "owner_id": "cli-pid-12345",
   "acquired_at_unix_ms": 1748123456789,
   "lease_duration_ms": 30000,
   "expires_at_unix_ms": 1748123486789,
@@ -273,12 +290,18 @@ filename is immediately detectable.
     "resource_name": "chat",
     "file_path": null
   },
+  "scope_hash": "sha256:...",
   "mutation_type": "manifest_rebuild",
   "precondition_hash": "sha256:aabbcc...",
   "last_journal_sequence_at_acquisition": 41,
   "writer_id": "cli-pid-12345"
 }
 ```
+
+`scope_hash` is `sha256(canonical(lock_scope))`. Lease validity is tied to
+`scope_hash`, not just `owner_id` and time. This prevents stale owner resurrection
+from accidentally mutating a different scope, and makes lease reuse across state
+versions that change scope meaning impossible.
 
 ### Lease Lifecycle
 
@@ -346,6 +369,20 @@ replay from arbitrary journal positions.
    All in-memory state during replay is discarded on failure.
 ```
 
+### Forbidden Shortcuts
+
+The following optimizations are explicitly prohibited. They produce ghost-state bugs.
+
+- **Replay must not trust partial disk state.** Do not reuse existing manifest
+  entries that "happen to match" expected hashes. Replay derives state entirely from
+  journal entries applied to the snapshot baseline.
+- **Snapshots must not be incrementally patched during replay.** A snapshot is
+  written once, after a complete and verified replay sequence, not updated in place
+  as each journal entry is applied.
+
+If either shortcut is introduced, the precondition/postcondition hash checks become
+meaningless — they will pass on stale state that merely looks correct.
+
 ---
 
 ## 8. Failure Recovery Table
@@ -367,7 +404,36 @@ replay from arbitrary journal positions.
 These are the expected module boundaries, not implementations. Naming is
 normative — implementations must match.
 
+`state.rs` is the dependency root. All other modules import from it. No other
+module may define shared truth types.
+
 ```rust
+// crates/client/src/state.rs
+// Single source of truth for shared types. All other modules depend on this.
+// Nothing else defines CommittedState, StateView, or hash primitives.
+
+/// Canonical committed state: the pairing of a verified snapshot and the
+/// journal entry that brought it into existence.
+pub struct CommittedState {
+    pub snapshot: ManifestSnapshot,
+    pub journal_head_hash: String,
+}
+
+/// Derived in-memory view during replay. Never persisted. Dropped on failure.
+pub struct StateView {
+    pub entries: Vec<CacheManifestEntry>,
+    pub current_hash: String, // sha256(canonical(entries))
+}
+
+impl StateView {
+    pub fn from_snapshot(snapshot: &ManifestSnapshot) -> Self;
+    pub fn apply_entry(&mut self, entry: &JournalEntry) -> Result<(), ReplayError>;
+    pub fn into_snapshot(self, journal_head_hash: String, parent: &ManifestSnapshot) -> ManifestSnapshot;
+}
+
+/// Canonical JSON hash. Single implementation used everywhere.
+pub fn canonical_hash(value: &impl serde::Serialize) -> Result<String>;
+
 // crates/client/src/journal.rs
 
 pub struct JournalEntry {
