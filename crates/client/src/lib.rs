@@ -2,6 +2,8 @@
 pub mod fetch;
 pub mod heartbeat;
 pub mod reconciliation;
+pub mod repair;
+pub mod trust;
 
 use anyhow::Context;
 use anyhow::Result;

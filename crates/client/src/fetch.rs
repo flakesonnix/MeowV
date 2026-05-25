@@ -295,11 +295,8 @@ pub async fn save_cache_manifest(cache_dir: &Path, manifest: &CacheManifest) -> 
     Ok(())
 }
 
-/// Update the cache manifest after a successful verified commit. Loads the
-/// existing manifest (or creates an empty one), inserts/replaces the entry,
-/// and saves atomically. Returns the updated manifest on success, or an error
-/// on I/O failure.
-pub async fn update_cache_manifest_after_commit(
+/// Upsert a manifest entry: load existing manifest, insert/replace entry, save atomically.
+pub async fn write_manifest_entry(
     cache_dir: &Path,
     entry: &CacheManifestEntry,
 ) -> std::result::Result<CacheManifest, String> {
@@ -309,6 +306,13 @@ pub async fn update_cache_manifest_after_commit(
         .await
         .map_err(|e| format!("manifest write failed: {e}"))?;
     Ok(updated)
+}
+
+pub async fn update_cache_manifest_after_commit(
+    cache_dir: &Path,
+    entry: &CacheManifestEntry,
+) -> std::result::Result<CacheManifest, String> {
+    write_manifest_entry(cache_dir, entry).await
 }
 
 /// Configuration for fetch execution and optional cache commit.
