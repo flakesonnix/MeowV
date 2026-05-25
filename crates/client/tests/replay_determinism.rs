@@ -77,6 +77,7 @@ fn upsert_journal_entry(
     .unwrap()
 }
 
+#[allow(dead_code)]
 fn rebuild_journal_entry(
     sequence: u64,
     prev_entry_hash: String,
@@ -315,9 +316,10 @@ async fn replay_rejects_hash_chain_break() {
         "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
 
     // Write both entries manually (je1 untouched, je2 with tampered prev_entry_hash).
-    let mut lines = Vec::new();
-    lines.push(serde_json::to_string(&je1).unwrap());
-    lines.push(serde_json::to_string(&je2).unwrap());
+    let lines = vec![
+        serde_json::to_string(&je1).unwrap(),
+        serde_json::to_string(&je2).unwrap(),
+    ];
     std::fs::write(&journal_path, lines.join("\n") + "\n").unwrap();
 
     let journal = JournalReader::new(journal_path.clone());
