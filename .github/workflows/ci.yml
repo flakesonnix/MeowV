@@ -25,5 +25,14 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Check client default build graph
+        run: cargo check -p client
+
+      - name: Test client default build graph
+        run: cargo test -p client
+
+      - name: Test client with test-support feature
+        run: cargo test -p client --features test-support
+
       - name: Run tests
         run: cargo test --workspace

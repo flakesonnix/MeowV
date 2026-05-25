@@ -91,8 +91,10 @@ impl Announcement<Parsed> {
         }
     }
 
-    /// Advance to PolicyChecked without key checks (use when policy is Relaxed or keys
-    /// are irrelevant to the calling context). Prefer `check_policy` in production paths.
+    /// Test helper to advance to PolicyChecked without key checks.
+    /// Not for production trust resolution paths.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub fn skip_policy_check(self) -> Announcement<PolicyChecked> {
         Announcement { inner: self.inner, _state: PhantomData }
     }
@@ -102,9 +104,10 @@ impl Announcement<Parsed> {
 
 impl Announcement<PolicyChecked> {
     /// Advance to Trusted without cryptographic verification.
-    /// Use for Relaxed-policy paths and test contexts where signature checking
-    /// is intentionally not required.
-    pub fn trust_relaxed(self) -> Announcement<Trusted> {
+    /// Test helper for constructing trusted announcements without external key
+    /// material. Not for production trust resolution paths.
+    #[doc(hidden)]
+    pub fn trust_relaxed_for_testing(self) -> Announcement<Trusted> {
         Announcement { inner: self.inner, _state: PhantomData }
     }
 
@@ -169,6 +172,7 @@ impl Announcement<Trusted> {
     }
 
     /// Consume and return the inner announcement.
+    #[doc(hidden)]
     pub fn into_announcement(self) -> ResourceAnnouncement {
         self.inner
     }

@@ -3,14 +3,14 @@ use client::repair::{
     CacheRepairConfig, CacheRepairOutcome, build_cache_repair_plan, execute_cache_repair,
 };
 use client::reconciliation::{CacheFileEntry, build_cache_reconciliation_plan};
-use client::trust::{Announcement, Unverified};
+use client::trust::{Announcement, PolicyChecked, Trusted, Unverified};
 
-fn make_trusted(
-    ann: protocol::ResourceAnnouncement,
-) -> Announcement<client::trust::Trusted> {
-    Announcement::<Unverified>::from_constructed(ann)
-        .skip_policy_check()
-        .trust_relaxed()
+fn trust_relaxed_for_test(announcement: Announcement<PolicyChecked>) -> Announcement<Trusted> {
+    Announcement::<PolicyChecked>::trust_relaxed_for_testing(announcement)
+}
+
+fn make_trusted(ann: protocol::ResourceAnnouncement) -> Announcement<Trusted> {
+    trust_relaxed_for_test(Announcement::<Unverified>::from_constructed(ann).skip_policy_check())
 }
 use protocol::{
     AnnouncedResource, AnnouncedResourceFile, PROTOCOL_VERSION, ResourceAnnouncement,
