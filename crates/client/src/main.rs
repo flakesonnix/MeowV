@@ -1217,8 +1217,25 @@ async fn print_execute_cache_repair(
     let announcement: ResourceAnnouncement =
         serde_json::from_str(&raw).context("failed to parse ResourceAnnouncement JSON")?;
 
-    if matches!(policy, SignaturePolicy::Strict) && read_flag(args, "--trusted-keys").is_none() {
-        anyhow::bail!("--signature-policy strict requires --trusted-keys <path>");
+    // Load and parse trusted keys — not just check existence.
+    // Unvalidated → Parsed boundary: keys must be readable and structurally valid before
+    // the announcement is trusted enough to drive repair mutations.
+    let trusted_keys: Option<Vec<TrustedPublicKey>> = match read_flag(args, "--trusted-keys") {
+        Some(ref path) => Some(load_trusted_keys(path)?),
+        None => None,
+    };
+
+    match (policy, &trusted_keys) {
+        (SignaturePolicy::Strict, None) => {
+            anyhow::bail!("--signature-policy strict requires --trusted-keys <path>");
+        }
+        (SignaturePolicy::Strict, Some(keys)) if keys.is_empty() => {
+            anyhow::bail!(
+                "--signature-policy strict requires at least one trusted key; \
+                 key file was empty or contained no valid entries"
+            );
+        }
+        _ => {}
     }
 
     let (_reconciliation, repair_plan) = client::repair::plan_cache_repair(

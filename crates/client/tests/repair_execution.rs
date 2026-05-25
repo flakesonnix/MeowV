@@ -296,6 +296,105 @@ fn repair_hash_mismatch_replaces_file() {
 }
 
 #[test]
+fn repair_both_flags_false_produces_blocked_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache_dir = dir.path().join("cache");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+
+    let content = b"blocked test file";
+    let expected_sha = sha256_hex(content);
+    let source_file = dir.path().join("source.dat");
+    std::fs::write(&source_file, content).unwrap();
+
+    let announcement = make_announcement_with_source(
+        "chat",
+        "main.lua",
+        content.len() as u64,
+        &expected_sha,
+        make_source(&source_file.to_string_lossy(), content.len() as u64, &expected_sha),
+    );
+
+    let reconciliation = build_cache_reconciliation_plan(
+        &client::fetch::CacheManifest {
+            version: 1,
+            entries: vec![make_manifest_entry(
+                "chat",
+                "main.lua",
+                &expected_sha,
+                content.len() as u64,
+            )],
+        },
+        &[],
+        &announcement,
+        false,
+    );
+    let repair_plan = build_cache_repair_plan(&reconciliation, &announcement);
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let report = rt
+        .block_on(execute_cache_repair(
+            &announcement,
+            &repair_plan,
+            &CacheRepairConfig {
+                dry_run: false,
+                allow_manifest_repair: false,
+                allow_refetch_repair: false,
+                cache_dir: Some(cache_dir.to_string_lossy().to_string()),
+            },
+        ))
+        .unwrap();
+
+    assert_eq!(report.entries.len(), 1);
+    assert_eq!(report.entries[0].outcome, CacheRepairOutcome::Blocked);
+    assert!(report.entries[0].failure_reason.is_some());
+    // Cache must not have been touched.
+    assert!(!cache_dir.join("main.lua").exists());
+}
+
+#[test]
+fn repair_missing_cache_dir_returns_blocked() {
+    let announcement = make_announcement_with_source(
+        "chat",
+        "main.lua",
+        10,
+        &"a".repeat(64),
+        make_source("/nonexistent/source.dat", 10, &"a".repeat(64)),
+    );
+
+    let reconciliation = build_cache_reconciliation_plan(
+        &client::fetch::CacheManifest {
+            version: 1,
+            entries: vec![make_manifest_entry("chat", "main.lua", &"a".repeat(64), 10)],
+        },
+        &[],
+        &announcement,
+        false,
+    );
+    let repair_plan = build_cache_repair_plan(&reconciliation, &announcement);
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let report = rt
+        .block_on(execute_cache_repair(
+            &announcement,
+            &repair_plan,
+            &CacheRepairConfig {
+                dry_run: false,
+                allow_manifest_repair: true,
+                allow_refetch_repair: true,
+                cache_dir: None, // missing cache dir
+            },
+        ))
+        .unwrap();
+
+    assert_eq!(report.entries.len(), 1);
+    assert_eq!(report.entries[0].outcome, CacheRepairOutcome::Blocked);
+    assert!(matches!(
+        report.entries[0].failure_reason,
+        Some(client::repair::CacheRepairFailureReason::MissingCacheDir)
+    ));
+}
+
+#[test]
 fn repair_plan_ignores_orphan_and_announcement_missing() {
     let announcement = ResourceAnnouncement {
         resources: vec![],

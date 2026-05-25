@@ -347,7 +347,16 @@ pub async fn plan_cache_repair(
     let manifest_corrupted = if manifest_path.exists() && manifest.is_empty() {
         match tokio::fs::read_to_string(&manifest_path).await {
             Ok(data) => !data.trim().is_empty(),
-            Err(_) => true,
+            Err(e) => {
+                // I/O error (permissions, transient) ≠ structural corruption.
+                // Do not trigger rebuild; let the caller handle inaccessible manifests.
+                tracing::warn!(
+                    path = %manifest_path.display(),
+                    error = %e,
+                    "failed to read manifest for corruption check; treating as non-corrupted"
+                );
+                false
+            }
         }
     } else {
         false
