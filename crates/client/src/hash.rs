@@ -59,9 +59,9 @@ impl FromStr for Hash {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let hex = s.strip_prefix("sha256:").ok_or_else(|| {
-            format!("Hash must start with 'sha256:': got '{s}'")
-        })?;
+        let hex = s
+            .strip_prefix("sha256:")
+            .ok_or_else(|| format!("Hash must start with 'sha256:': got '{s}'"))?;
         if hex.len() != 64 {
             return Err(format!(
                 "Hash hex must be exactly 64 characters, got {}",

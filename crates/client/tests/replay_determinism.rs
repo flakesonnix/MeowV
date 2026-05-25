@@ -270,12 +270,22 @@ async fn replay_rejects_hash_chain_break() {
     let entries_after_1 = vec![e1];
 
     let e2 = make_entry("chat", "ui.lua", "sha-b");
-    // Intentionally break chain: use wrong prev_entry_hash.
-    let je2 = upsert_journal_entry(2, "sha256:tampered-hash".to_string(), &entries_after_1, e2);
+    // Build je2 with correct prev_entry_hash first (so JournalEntry::new succeeds),
+    // then tamper prev_entry_hash before writing to disk.
+    let mut je2 = upsert_journal_entry(
+        2,
+        je1.entry_hash.clone(),
+        &entries_after_1,
+        e2,
+    );
+    // Tamper with the hash chain: prev_entry_hash does not match je1.entry_hash.
+    je2.prev_entry_hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
 
-    let mut writer = JournalWriter::open(&journal_path).await.unwrap();
-    writer.append(&je1).await.unwrap();
-    writer.append(&je2).await.unwrap();
+    // Write both entries manually (je1 untouched, je2 with tampered prev_entry_hash).
+    let mut lines = Vec::new();
+    lines.push(serde_json::to_string(&je1).unwrap());
+    lines.push(serde_json::to_string(&je2).unwrap());
+    std::fs::write(&journal_path, lines.join("\n") + "\n").unwrap();
 
     let journal = JournalReader::new(journal_path.clone());
     let err = replay_journal(&genesis, &journal, &snapshot_dir).await.unwrap_err();

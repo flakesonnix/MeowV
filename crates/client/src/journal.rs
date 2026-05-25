@@ -133,8 +133,12 @@ impl JournalEntry {
     ) -> Result<String> {
         use sha2::Digest;
         let scope_json = serde_json::to_string(scope)?;
-        let combined =
-            format!("{}{}{}", mutation_type.label(), scope_json, postcondition_hash);
+        let combined = format!(
+            "{}{}{}",
+            mutation_type.label(),
+            scope_json,
+            postcondition_hash
+        );
         let digest = sha2::Sha256::digest(combined.as_bytes());
         Ok(format!("sha256:{:x}", digest))
     }
@@ -151,11 +155,8 @@ impl JournalEntry {
         checkpoint_state: Option<serde_json::Value>,
         origin_context: Option<String>,
     ) -> Result<Self> {
-        let idempotency_key = Self::compute_idempotency_key(
-            &mutation_type,
-            &target_scope,
-            &postcondition_hash,
-        )?;
+        let idempotency_key =
+            Self::compute_idempotency_key(&mutation_type, &target_scope, &postcondition_hash)?;
         let mut entry = Self {
             schema_version: 1,
             entry_id: new_id(),
@@ -178,10 +179,9 @@ impl JournalEntry {
         let prev_hash = if entry.prev_entry_hash == "genesis" {
             Hash::GENESIS
         } else {
-            Hash::from_prefixed_hex(&entry.prev_entry_hash)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "invalid prev_entry_hash: {}", entry.prev_entry_hash
-                ))?
+            Hash::from_prefixed_hex(&entry.prev_entry_hash).ok_or_else(|| {
+                anyhow::anyhow!("invalid prev_entry_hash: {}", entry.prev_entry_hash)
+            })?
         };
         entry.entry_hash = Self::compute_hash(&entry, &prev_hash)?;
         Ok(entry)
