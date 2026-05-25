@@ -1,8 +1,13 @@
 // Library facade for the client crate so integration tests can access helpers.
 pub mod fetch;
 pub mod heartbeat;
+pub mod journal;
+pub mod lock;
 pub mod reconciliation;
 pub mod repair;
+pub mod replay;
+pub mod snapshot;
+pub mod state;
 pub mod trust;
 
 use anyhow::Context;
