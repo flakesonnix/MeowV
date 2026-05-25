@@ -106,6 +106,7 @@ impl Announcement<PolicyChecked> {
     /// Advance to Trusted without cryptographic verification.
     /// Test helper for constructing trusted announcements without external key
     /// material. Not for production trust resolution paths.
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn trust_relaxed_for_testing(self) -> Announcement<Trusted> {
         Announcement { inner: self.inner, _state: PhantomData }

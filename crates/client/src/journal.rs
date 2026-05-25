@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use crate::fetch::CacheManifestEntry;
 use crate::state::{canonical_hash, new_id, now_unix_ms};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +62,22 @@ pub struct LockScope {
     pub resource_name: String,
     /// None = entire resource.
     pub file_path: Option<String>,
+}
+
+// ── Operation payloads ────────────────────────────────────────────────────────
+
+/// Payload for `ManifestEntryRepair` and `FileRefetch` mutations.
+/// Upserts a single manifest entry (matched by resource_name + file_path).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntryUpsertPayload {
+    pub entry: CacheManifestEntry,
+}
+
+/// Payload for `ManifestRebuild` mutations.
+/// Replaces the entire manifest entry set atomically.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestRebuildPayload {
+    pub entries: Vec<CacheManifestEntry>,
 }
 
 impl JournalEntry {

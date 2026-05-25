@@ -5,6 +5,8 @@ license.workspace = true
 version.workspace = true
 
 [features]
+# Build-time capability for integration tests that need trust-state construction
+# without external key material. Not a production feature toggle.
 test-support = []
 
 [dependencies]
@@ -28,3 +30,7 @@ base64.workspace = true
 [dev-dependencies]
 server = { path = "../server" }
 tempfile = "3"
+
+[[test]]
+name = "repair_execution"
+required-features = ["test-support"]
