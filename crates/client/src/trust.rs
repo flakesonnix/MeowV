@@ -91,7 +91,7 @@ impl Announcement<Parsed> {
             (SignaturePolicy::Strict, None) => Err(TrustRejected {
                 reason: "--signature-policy strict requires --trusted-keys <path>".to_string(),
             }),
-            (SignaturePolicy::Strict, Some(k)) if k.is_empty() => Err(TrustRejected {
+            (SignaturePolicy::Strict, Some([])) => Err(TrustRejected {
                 reason: "--signature-policy strict requires at least one trusted key".to_string(),
             }),
             _ => Ok(Announcement {

@@ -143,6 +143,7 @@ impl JournalEntry {
         Ok(format!("sha256:{:x}", digest))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sequence: u64,
         mutation_type: MutationType,
